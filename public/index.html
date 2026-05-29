@@ -580,7 +580,7 @@
     </select>
     <span class="settings-label">WISP</span>
     <input class="wisp-input" id="wisp-url" type="text"
-      value="wss://wisp.mercurywork.shop/" spellcheck="false" />
+      value="" spellcheck="false" placeholder="auto (self-hosted)" />
     <span class="settings-label" id="status-text" style="margin-left:auto">Loading…</span>
   </div>
 </div>
@@ -674,6 +674,13 @@
   // ──────────────────────────────────────────
   //  HELPERS
   // ──────────────────────────────────────────
+  // Derive Wisp URL from the current origin so the self-hosted /wisp/ is used
+  // automatically on any deployment (Koyeb, localhost, custom domain, etc.)
+  function getDefaultWispUrl() {
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${window.location.host}/wisp/`;
+  }
+
   function showToast(msg, isError = false) {
     toast.textContent = msg;
     toast.className = 'show' + (isError ? ' error' : '');
@@ -744,6 +751,8 @@
 
       // Init BareMux
       baremuxConn = new BareMux.BareMuxConnection('/baremux/worker.js');
+      // Pre-fill the input with the self-hosted Wisp URL derived from our origin
+      if (!wispInput.value) wispInput.value = getDefaultWispUrl();
       await setTransport();
 
       // Done
@@ -769,17 +778,30 @@
     }
   }
 
+  // bare-mux v2 resolves setTransport() only after the Wisp WebSocket connects.
+  // If the Wisp server is slow or unreachable the Promise hangs forever, which
+  // prevents initProxy() from removing the overlay and freezes the UI.
+  // We race every setTransport call against an 8-second timeout so the init
+  // sequence always completes regardless of network conditions.
+  const TRANSPORT_TIMEOUT = 8000;
+
   async function setTransport() {
     if (!baremuxConn) return;
     const transport = transportSel.value;
-    const wispUrl = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
+    // Prefer whatever the user typed; fall back to the self-hosted /wisp/ endpoint.
+    const wispUrl = wispInput.value.trim() || getDefaultWispUrl();
 
     try {
-      if (transport === 'epoxy') {
-        await baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: wispUrl }]);
-      } else {
-        await baremuxConn.setTransport('/libcurl/index.mjs', [{ wisp: wispUrl }]);
-      }
+      const setPromise = transport === 'epoxy'
+        ? baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: wispUrl }])
+        : baremuxConn.setTransport('/libcurl/index.mjs', [{ wisp: wispUrl }]);
+
+      // Never hang forever — resolve after timeout even if Wisp is unreachable
+      await Promise.race([
+        setPromise,
+        new Promise(resolve => setTimeout(resolve, TRANSPORT_TIMEOUT))
+      ]);
+
       statusDot.className = 'status-dot ready';
       statusText.textContent = 'READY';
       showToast(`Transport: ${transport.toUpperCase()} · Wisp: ${wispUrl}`);
@@ -789,12 +811,16 @@
       statusText.textContent = 'TRANSPORT ERR';
       showToast('Transport failed, trying fallback…', true);
 
-      // Fallback to public wisp
+      // Fallback: try the self-hosted Wisp with epoxy
       try {
-        await baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: 'wss://wisp.mercurywork.shop/' }]);
+        const fallbackWisp = getDefaultWispUrl();
+        await Promise.race([
+          baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: fallbackWisp }]),
+          new Promise(resolve => setTimeout(resolve, TRANSPORT_TIMEOUT))
+        ]);
         statusDot.className = 'status-dot ready';
         statusText.textContent = 'FALLBACK OK';
-        showToast('Using fallback: wss://wisp.mercurywork.shop/');
+        showToast(`Fallback: Epoxy · Wisp: ${fallbackWisp}`);
       } catch (e2) {
         console.error('[Andesine] Fallback transport failed:', e2);
       }
