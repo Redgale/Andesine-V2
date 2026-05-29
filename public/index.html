@@ -749,27 +749,59 @@
       }
 
       // ── Scramjet v2 ESM controller ──────────────────────────────────────
-      // v2 dropped the $scramjetLoad* global API entirely.
-      // Import ScramjetController directly from the ESM bundle instead.
-      const { ScramjetController } = await import('/scram/scramjet.mjs');
+      // v2.0.67-alpha.1 ships scramjet.mjs as a single combined ESM bundle.
+      // During this transitional alpha, ScramjetController may be exported as:
+      //   (a) a named export that is an arrow/factory function (non-constructable)
+      //   (b) a named export that is a regular class (constructable)
+      //   (c) the module's default export
+      //   (d) missing from the SW-facing bundle entirely
+      // We resolve all four cases below before attempting instantiation.
+      const scramjetMod = await import('/scram/scramjet.mjs');
 
-      scramjet = new ScramjetController({
+      // Diagnostic: log exactly what the module exposes so Koyeb logs show the truth.
+      console.log('[Andesine] scramjet.mjs named exports:', Object.keys(scramjetMod));
+
+      // Resolution order: named → default.ScramjetController → default
+      const Ctrl =
+        scramjetMod.ScramjetController ??
+        scramjetMod.default?.ScramjetController ??
+        scramjetMod.default;
+
+      if (Ctrl == null || typeof Ctrl !== 'function') {
+        throw new Error(
+          `ScramjetController not found or not a function. ` +
+          `Module exports: [${Object.keys(scramjetMod).join(', ')}] ` +
+          `| typeof default: ${typeof scramjetMod.default}`
+        );
+      }
+
+      // Arrow functions have no .prototype; classes and regular functions do.
+      // If there's no prototype, calling with `new` throws "not a constructor",
+      // so we call it as a factory instead.
+      const controllerConfig = {
         prefix: '/andesine/',
         files: {
           wasm: '/scram/scramjet.wasm',
-          // 'all' / 'sync' are gone in v2 — the ESM SW imports scramjet.mjs directly.
         },
-      });
+      };
+      scramjet = Ctrl.prototype ? new Ctrl(controllerConfig) : Ctrl(controllerConfig);
 
-      // Register the SW explicitly as an ES module (v2 SWs use static import,
-      // so { type: 'module' } is required — a classic SW would reject it).
-      await navigator.serviceWorker.register('/sw.js', {
-        type: 'module',
-        scope: '/',
-      });
+      // Register the SW. The type depends on the alpha build:
+      //   - ESM SW (uses static `import`): requires { type: 'module' }
+      //   - Classic SW (uses importScripts): must NOT pass type:'module'
+      // We try 'module' first and silently fall back if the browser rejects it.
+      try {
+        await navigator.serviceWorker.register('/sw.js', {
+          type: 'module',
+          scope: '/',
+        });
+      } catch (_) {
+        // Some browsers/environments don't support module SWs; retry as classic.
+        await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      }
       await navigator.serviceWorker.ready;
 
-      // v2: init() sets up controller internals; SW is already registered above.
+      // v2: init() stores config in IndexedDB and sets up the controller.
       await scramjet.init();
 
       initMsg.textContent = 'CONFIGURING TRANSPORT';
