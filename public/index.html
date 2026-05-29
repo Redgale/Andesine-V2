@@ -588,7 +588,7 @@
     </select>
     <span class="settings-label">WISP</span>
     <input class="wisp-input" id="wisp-url" type="text"
-      value="wss://wisp.mercurywork.shop/" spellcheck="false" />
+      value="wss://andesine2.koyeb.app/wisp/" spellcheck="false" />
     <span class="settings-label" id="status-text" style="margin-left:auto">Loading…</span>
   </div>
 </div>
@@ -619,7 +619,7 @@
 <div id="load-bar"></div>
 
 <!-- Proxy iframe -->
-<iframe id="proxy-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"></iframe>
+<iframe id="proxy-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"></iframe>
 
 <!-- Toast notifications -->
 <div id="toast"></div>
@@ -703,7 +703,7 @@
     const s = raw.trim();
     if (!s) return null;
     if (!/^https?:\/\//i.test(s) && !/\./i.test(s)) {
-      return 'https://www.google.com/search?q=' + encodeURIComponent(s);
+      return 'https://duckduckgo.com/?q=' + encodeURIComponent(s);
     }
     if (!/^https?:\/\//i.test(s)) return 'https://' + s;
     return s;
