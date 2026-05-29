@@ -1,9 +1,7 @@
 import Fastify from "fastify";
 import staticPlugin from "@fastify/static";
 import { server as wispServer } from "@mercuryworkshop/wisp-js/server";
-// scramjet v2: path export moved to package root. If this import fails after
-// npm install, try: import { scramjetPath } from "@mercuryworkshop/scramjet/path";
-import { scramjetPath } from "@mercuryworkshop/scramjet";
+import { scramjetPath } from "@mercuryworkshop/scramjet/path";
 import path from "path";
 import { fileURLToPath } from "url";
 
