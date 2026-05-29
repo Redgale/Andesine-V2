@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Andesine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #080808;
+      --surface: #111111;
+      --surface2: #181818;
+      --surface3: #202020;
+      --border: #1e1414;
+      --border2: #2d1a1a;
+      --red: #c41f1f;
+      --red-bright: #e83232;
+      --red-dim: #7a1212;
+      --red-glow: rgba(196, 31, 31, 0.15);
+      --red-glow2: rgba(196, 31, 31, 0.08);
+      --text: #e2d8d4;
+      --text2: #8a7878;
+      --text3: #5a4c4c;
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'DM Sans', sans-serif;
+      --display: 'Cinzel', serif;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      overflow: hidden;
+    }
+
+    /* === CRYSTAL BACKGROUND PATTERN === */
+    #crystal-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0.35;
+    }
+
+    /* === HOME SCREEN === */
+    #home {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+
+    #home.hidden {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-20px);
+    }
+
+    /* Logo section */
+    .logo-wrap {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      margin-bottom: 48px;
+    }
+
+    .logo-crystal {
+      width: 52px;
+      height: 52px;
+      flex-shrink: 0;
+    }
+
+    .logo-text {
+      font-family: var(--display);
+      font-size: 42px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--text);
+      text-shadow: 0 0 40px var(--red-glow), 0 0 80px var(--red-glow2);
+    }
+
+    .logo-tagline {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.25em;
+      color: var(--text3);
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    /* Omnibox */
+    .omni-wrap {
+      width: 680px;
+      max-width: calc(100vw - 48px);
+      position: relative;
+    }
+
+    .omni-bar {
+      display: flex;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 0 16px;
+      height: 54px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      gap: 12px;
+    }
+
+    .omni-bar:focus-within {
+      border-color: var(--red-dim);
+      box-shadow: 0 0 0 2px var(--red-glow), inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .omni-icon {
+      color: var(--text3);
+      font-size: 16px;
+      flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+    }
+
+    #omni-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-family: var(--mono);
+      font-size: 14px;
+      color: var(--text);
+      caret-color: var(--red-bright);
+    }
+
+    #omni-input::placeholder {
+      color: var(--text3);
+    }
+
+    .omni-go {
+      background: var(--red);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 16px;
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+
+    .omni-go:hover { background: var(--red-bright); }
+    .omni-go:active { transform: scale(0.97); }
+
+    /* Quick links */
+    .quick-section {
+      margin-top: 40px;
+      width: 680px;
+      max-width: calc(100vw - 48px);
+    }
+
+    .quick-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      color: var(--text3);
+      text-transform: uppercase;
+      margin-bottom: 14px;
+      padding-left: 2px;
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+    }
+
+    .quick-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      text-decoration: none;
+    }
+
+    .quick-item:hover {
+      background: var(--surface2);
+      border-color: var(--border2);
+    }
+
+    .quick-item:hover .quick-name {
+      color: var(--text);
+    }
+
+    .quick-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .quick-name {
+      font-size: 11px;
+      color: var(--text2);
+      text-align: center;
+      transition: color 0.15s;
+      font-family: var(--sans);
+    }
+
+    /* Settings strip */
+    .settings-strip {
+      margin-top: 32px;
+      width: 680px;
+      max-width: calc(100vw - 48px);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .settings-label {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text3);
+      letter-spacing: 0.1em;
+      white-space: nowrap;
+    }
+
+    .transport-select {
+      background: var(--surface3);
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      color: var(--text2);
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 5px 10px;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .transport-select:focus { border-color: var(--red-dim); }
+
+    .wisp-input {
+      flex: 1;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text2);
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 5px 10px;
+      outline: none;
+    }
+
+    .wisp-input:focus { border-color: var(--red-dim); }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text3);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+
+    .status-dot.ready { background: var(--red-bright); box-shadow: 0 0 6px var(--red); }
+    .status-dot.loading { background: #e8a020; animation: pulse 1s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* === BROWSER CHROME (visible when proxying) === */
+    #browser-chrome {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 48px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border2);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 10px;
+      transform: translateY(-100%);
+      transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    #browser-chrome.visible { transform: translateY(0); }
+
+    .nav-btn {
+      width: 30px;
+      height: 30px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text2);
+      transition: background 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+
+    .nav-btn:hover { background: var(--surface3); color: var(--text); }
+    .nav-btn:active { transform: scale(0.95); }
+    .nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .nav-btn svg { width: 14px; height: 14px; }
+
+    #chrome-omni {
+      flex: 1;
+      height: 32px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    #chrome-omni:focus { border-color: var(--red-dim); }
+
+    .chrome-home-btn {
+      padding: 5px 12px;
+      background: transparent;
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      color: var(--text2);
+      font-family: var(--sans);
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      transition: background 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+
+    .chrome-home-btn:hover {
+      background: rgba(196, 31, 31, 0.15);
+      color: var(--red-bright);
+      border-color: var(--red-dim);
+    }
+
+    /* Loading bar */
+    #load-bar {
+      position: fixed;
+      top: 48px;
+      left: 0;
+      height: 2px;
+      background: var(--red);
+      z-index: 200;
+      width: 0%;
+      transition: width 0.3s ease, opacity 0.3s;
+      opacity: 0;
+      box-shadow: 0 0 8px var(--red);
+    }
+
+    /* === PROXY IFRAME === */
+    #proxy-frame {
+      position: fixed;
+      top: 48px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border: none;
+      width: 100%;
+      height: calc(100% - 48px);
+      z-index: 50;
+      background: white;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    #proxy-frame.visible { opacity: 1; }
+
+    /* === INIT OVERLAY === */
+    #init-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      z-index: 999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 20px;
+      transition: opacity 0.5s;
+    }
+
+    #init-overlay.done {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .init-logo {
+      font-family: var(--display);
+      font-size: 28px;
+      letter-spacing: 0.15em;
+      color: var(--text);
+    }
+
+    .init-msg {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text3);
+      letter-spacing: 0.12em;
+    }
+
+    .init-spinner {
+      width: 28px;
+      height: 28px;
+      border: 2px solid var(--border2);
+      border-top-color: var(--red);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* === TOAST === */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 10px 20px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text2);
+      z-index: 500;
+      transition: transform 0.3s;
+      white-space: nowrap;
+    }
+
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.error { color: var(--red-bright); border-color: var(--red-dim); }
+
+    /* Version badge */
+    .version-badge {
+      position: fixed;
+      bottom: 20px;
+      right: 24px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text3);
+      letter-spacing: 0.1em;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Init overlay while SW registers -->
+<div id="init-overlay">
+  <div class="init-logo">ANDESINE</div>
+  <div class="init-spinner"></div>
+  <div class="init-msg" id="init-msg">INITIALIZING PROXY ENGINE</div>
+</div>
+
+<!-- Crystal background SVG -->
+<svg id="crystal-bg" viewBox="0 0 1400 900" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cg1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3a0a0a" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="cg2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1f0808" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Large crystal facets -->
+  <polygon points="0,900 300,400 600,900" fill="url(#cg1)" stroke="#2a0a0a" stroke-width="0.5"/>
+  <polygon points="200,0 600,300 400,0" fill="url(#cg2)" stroke="#1a0808" stroke-width="0.5"/>
+  <polygon points="700,0 1000,500 1400,0" fill="url(#cg1)" stroke="#200808" stroke-width="0.5"/>
+  <polygon points="1400,900 1100,400 800,900" fill="url(#cg2)" stroke="#1a0808" stroke-width="0.5"/>
+  <polygon points="400,900 700,500 1000,900" fill="url(#cg1)" stroke="#200808" stroke-width="0.5" opacity="0.5"/>
+  <polygon points="500,0 700,250 900,0" fill="#1a0606" stroke="#220a0a" stroke-width="0.5" opacity="0.7"/>
+  <!-- Interior crystal lines -->
+  <line x1="0" y1="400" x2="400" y2="200" stroke="#2d0e0e" stroke-width="0.5" opacity="0.8"/>
+  <line x1="400" y1="200" x2="700" y2="600" stroke="#220a0a" stroke-width="0.5" opacity="0.6"/>
+  <line x1="700" y1="600" x2="1100" y2="300" stroke="#2d0e0e" stroke-width="0.5" opacity="0.5"/>
+  <line x1="1100" y1="300" x2="1400" y2="700" stroke="#220a0a" stroke-width="0.5" opacity="0.7"/>
+  <line x1="300" y1="0" x2="600" y2="900" stroke="#1a0808" stroke-width="0.4" opacity="0.5"/>
+  <line x1="900" y1="0" x2="700" y2="900" stroke="#1e0808" stroke-width="0.4" opacity="0.4"/>
+  <!-- Glow spots -->
+  <circle cx="700" cy="450" r="280" fill="#8b0000" opacity="0.04"/>
+  <circle cx="200" cy="800" r="180" fill="#8b0000" opacity="0.04"/>
+  <circle cx="1200" cy="100" r="200" fill="#8b0000" opacity="0.03"/>
+</svg>
+
+<!-- Home screen -->
+<div id="home">
+  <!-- Logo -->
+  <div class="logo-wrap">
+    <svg class="logo-crystal" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Andesine crystal shape -->
+      <polygon points="26,2 46,14 46,38 26,50 6,38 6,14" fill="none" stroke="#c41f1f" stroke-width="1.5"/>
+      <polygon points="26,10 39,18 39,34 26,42 13,34 13,18" fill="#1a0808" stroke="#7a1212" stroke-width="0.8"/>
+      <polygon points="26,2 26,10 13,18 6,14" fill="#2a0e0e" stroke="#c41f1f" stroke-width="0.5" opacity="0.8"/>
+      <polygon points="26,2 26,10 39,18 46,14" fill="#1a0a0a" stroke="#c41f1f" stroke-width="0.5" opacity="0.5"/>
+      <polygon points="6,14 13,18 13,34 6,38" fill="#220a0a" stroke="#7a1212" stroke-width="0.5" opacity="0.6"/>
+      <polygon points="46,14 39,18 39,34 46,38" fill="#1a0808" stroke="#7a1212" stroke-width="0.5" opacity="0.4"/>
+      <polygon points="26,42 26,50 13,34 6,38" fill="#2a0e0e" stroke="#c41f1f" stroke-width="0.5" opacity="0.7"/>
+      <polygon points="26,42 26,50 39,34 46,38" fill="#1a0808" stroke="#c41f1f" stroke-width="0.5" opacity="0.5"/>
+      <!-- Center gleam -->
+      <circle cx="26" cy="26" r="3" fill="#c41f1f" opacity="0.7"/>
+      <line x1="26" y1="10" x2="26" y2="42" stroke="#c41f1f" stroke-width="0.4" opacity="0.4"/>
+      <line x1="13" y1="18" x2="39" y2="34" stroke="#c41f1f" stroke-width="0.4" opacity="0.3"/>
+      <line x1="39" y1="18" x2="13" y2="34" stroke="#c41f1f" stroke-width="0.4" opacity="0.3"/>
+    </svg>
+    <div>
+      <div class="logo-text">ANDESINE</div>
+      <div class="logo-tagline">Scramjet Proxy Engine</div>
+    </div>
+  </div>
+
+  <!-- Omnibox -->
+  <div class="omni-wrap">
+    <div class="omni-bar">
+      <svg class="omni-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M11 11l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <input id="omni-input" type="text" spellcheck="false" autocomplete="off"
+        placeholder="Enter URL or search — e.g. google.com" />
+      <button class="omni-go" id="go-btn">GO</button>
+    </div>
+  </div>
+
+  <!-- Quick links -->
+  <div class="quick-section">
+    <div class="quick-label">Quick launch</div>
+    <div class="quick-grid" id="quick-grid">
+      <!-- Populated by JS -->
+    </div>
+  </div>
+
+  <!-- Settings strip -->
+  <div class="settings-strip">
+    <div class="status-dot loading" id="status-dot"></div>
+    <span class="settings-label">TRANSPORT</span>
+    <select class="transport-select" id="transport-sel">
+      <option value="epoxy">Epoxy (encrypted)</option>
+      <option value="libcurl">libcurl (encrypted)</option>
+    </select>
+    <span class="settings-label">WISP</span>
+    <input class="wisp-input" id="wisp-url" type="text"
+      value="wss://wisp.mercurywork.shop/" spellcheck="false" />
+    <span class="settings-label" id="status-text" style="margin-left:auto">Loading…</span>
+  </div>
+</div>
+
+<!-- Browser chrome (shown during proxy) -->
+<div id="browser-chrome">
+  <button class="nav-btn" id="nav-back" disabled title="Back">
+    <svg viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <button class="nav-btn" id="nav-fwd" disabled title="Forward">
+    <svg viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <button class="nav-btn" id="nav-reload" title="Reload">
+    <svg viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 7A5 5 0 1 1 7 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <path d="M7 2l2.5-2.5L7 2l-2.5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4 2.5L7 2l3 .5"/>
+      <path d="M7 2l3-1-1 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+  <input id="chrome-omni" type="text" spellcheck="false" autocomplete="off" placeholder="Enter URL…" />
+  <button class="chrome-home-btn" id="home-btn">⬡ Home</button>
+</div>
+
+<!-- Loading progress bar -->
+<div id="load-bar"></div>
+
+<!-- Proxy iframe -->
+<iframe id="proxy-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"></iframe>
+
+<!-- Toast notifications -->
+<div id="toast"></div>
+
+<!-- Version badge -->
+<div class="version-badge">ANDESINE v1 · Scramjet</div>
+
+<!-- BareMux & Scramjet scripts -->
+<script src="/baremux/index.js"></script>
+<script src="/scram/scramjet.all.js"></script>
+
+<script>
+(async () => {
+  // ──────────────────────────────────────────
+  //  QUICK LINKS DATA
+  // ──────────────────────────────────────────
+  const quickLinks = [
+    { name: 'Google',    url: 'https://www.google.com',   color: '#1a6cf5', label: 'G' },
+    { name: 'YouTube',   url: 'https://www.youtube.com',  color: '#c41f1f', label: '▶' },
+    { name: 'Reddit',    url: 'https://www.reddit.com',   color: '#b04010', label: 'r/' },
+    { name: 'Twitter',   url: 'https://twitter.com',      color: '#1a8cd8', label: '𝕏' },
+    { name: 'Discord',   url: 'https://discord.com/app', color: '#5865f2', label: 'DC' },
+    { name: 'Spotify',   url: 'https://open.spotify.com', color: '#1db954', label: '♫' },
+  ];
+
+  const grid = document.getElementById('quick-grid');
+  quickLinks.forEach(({ name, url, color, label }) => {
+    const item = document.createElement('div');
+    item.className = 'quick-item';
+    item.innerHTML = `
+      <div class="quick-icon" style="background:${color}22;color:${color};font-family:var(--mono);font-size:13px;font-weight:500;">${label}</div>
+      <div class="quick-name">${name}</div>`;
+    item.addEventListener('click', () => navigate(url));
+    grid.appendChild(item);
+  });
+
+  // ──────────────────────────────────────────
+  //  DOM REFS
+  // ──────────────────────────────────────────
+  const overlay    = document.getElementById('init-overlay');
+  const initMsg    = document.getElementById('init-msg');
+  const homeEl     = document.getElementById('home');
+  const chrome     = document.getElementById('browser-chrome');
+  const loadBar    = document.getElementById('load-bar');
+  const proxyFrame = document.getElementById('proxy-frame');
+  const statusDot  = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  const omniInput  = document.getElementById('omni-input');
+  const chromeOmni = document.getElementById('chrome-omni');
+  const wispInput  = document.getElementById('wisp-url');
+  const transportSel = document.getElementById('transport-sel');
+  const navBack    = document.getElementById('nav-back');
+  const navFwd     = document.getElementById('nav-fwd');
+  const navReload  = document.getElementById('nav-reload');
+  const goBtn      = document.getElementById('go-btn');
+  const homeBtn    = document.getElementById('home-btn');
+  const toast      = document.getElementById('toast');
+
+  // ──────────────────────────────────────────
+  //  HELPERS
+  // ──────────────────────────────────────────
+  function showToast(msg, isError = false) {
+    toast.textContent = msg;
+    toast.className = 'show' + (isError ? ' error' : '');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { toast.className = ''; }, 3500);
+  }
+
+  function normalizeUrl(raw) {
+    const s = raw.trim();
+    if (!s) return null;
+    // If it looks like a plain search query, use Google
+    if (!/^https?:\/\//i.test(s) && !/\./i.test(s)) {
+      return 'https://www.google.com/search?q=' + encodeURIComponent(s);
+    }
+    // Add protocol if missing
+    if (!/^https?:\/\//i.test(s)) return 'https://' + s;
+    return s;
+  }
+
+  function startLoadBar() {
+    loadBar.style.width = '0%';
+    loadBar.style.opacity = '1';
+    let w = 0;
+    loadBar._int = setInterval(() => {
+      w = Math.min(w + Math.random() * 12, 85);
+      loadBar.style.width = w + '%';
+    }, 200);
+  }
+
+  function finishLoadBar() {
+    clearInterval(loadBar._int);
+    loadBar.style.width = '100%';
+    setTimeout(() => { loadBar.style.opacity = '0'; loadBar.style.width = '0%'; }, 400);
+  }
+
+  // ──────────────────────────────────────────
+  //  SCRAMJET INIT
+  // ──────────────────────────────────────────
+  let scramjet = null;
+  let baremuxConn = null;
+  let transportReady = false;
+
+  async function initProxy() {
+    initMsg.textContent = 'REGISTERING SERVICE WORKER';
+
+    try {
+      if (!('serviceWorker' in navigator)) throw new Error('Service Workers not supported');
+
+      // Load Scramjet controller from the global function injected by scramjet.all.js
+      const { ScramjetController } = $scramjetLoadController();
+
+      scramjet = new ScramjetController({
+        prefix: '/andesine/',
+        files: {
+          wasm: '/scram/scramjet.wasm.wasm',
+          all:  '/scram/scramjet.all.js',
+          sync: '/scram/scramjet.sync.js',
+        },
+      });
+
+      await scramjet.init();
+
+      // Register the service worker
+      const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      await navigator.serviceWorker.ready;
+
+      initMsg.textContent = 'CONFIGURING TRANSPORT';
+
+      // Init BareMux
+      baremuxConn = new BareMux.BareMuxConnection('/baremux/worker.js');
+      await setTransport();
+
+      // Done
+      transportReady = true;
+      statusDot.className = 'status-dot ready';
+      statusText.textContent = 'READY';
+      initMsg.textContent = 'ENGINE READY';
+
+      setTimeout(() => {
+        overlay.classList.add('done');
+        setTimeout(() => overlay.remove(), 600);
+      }, 400);
+
+    } catch (err) {
+      statusDot.className = 'status-dot';
+      statusDot.style.background = '#e83232';
+      statusText.textContent = 'ERROR';
+      initMsg.textContent = 'INIT FAILED: ' + err.message;
+      overlay.classList.add('done');
+      setTimeout(() => overlay.remove(), 600);
+      console.error('[Andesine] Init error:', err);
+      showToast('Proxy init failed: ' + err.message, true);
+    }
+  }
+
+  async function setTransport() {
+    if (!baremuxConn) return;
+    const transport = transportSel.value;
+    const wispUrl = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
+
+    try {
+      if (transport === 'epoxy') {
+        await baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: wispUrl }]);
+      } else {
+        await baremuxConn.setTransport('/libcurl/index.mjs', [{ wisp: wispUrl }]);
+      }
+      statusDot.className = 'status-dot ready';
+      statusText.textContent = 'READY';
+      showToast(`Transport: ${transport.toUpperCase()} · Wisp: ${wispUrl}`);
+    } catch (err) {
+      statusDot.className = 'status-dot';
+      statusDot.style.background = '#e05020';
+      statusText.textContent = 'TRANSPORT ERR';
+      showToast('Transport failed, trying fallback…', true);
+
+      // Fallback to public wisp
+      try {
+        await baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: 'wss://wisp.mercurywork.shop/' }]);
+        statusDot.className = 'status-dot ready';
+        statusText.textContent = 'FALLBACK OK';
+        showToast('Using fallback: wss://wisp.mercurywork.shop/');
+      } catch (e2) {
+        console.error('[Andesine] Fallback transport failed:', e2);
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────
+  //  NAVIGATION
+  // ──────────────────────────────────────────
+  let isBrowsing = false;
+
+  async function navigate(rawUrl) {
+    const url = normalizeUrl(rawUrl);
+    if (!url) { showToast('Enter a URL or search term', true); return; }
+
+    if (!transportReady) {
+      showToast('Proxy not ready yet — please wait', true);
+      return;
+    }
+
+    chromeOmni.value = url;
+    startLoadBar();
+
+    // Switch to browser view
+    if (!isBrowsing) {
+      homeEl.classList.add('hidden');
+      chrome.classList.add('visible');
+      proxyFrame.classList.add('visible');
+      isBrowsing = true;
+    }
+
+    // Encode the URL with Scramjet's codec and navigate the iframe
+    try {
+      const encoded = scramjet.encodeUrl(url);
+      proxyFrame.src = encoded;
+    } catch (err) {
+      console.error('[Andesine] Navigation error:', err);
+      showToast('Navigation failed: ' + err.message, true);
+      finishLoadBar();
+    }
+  }
+
+  function goHome() {
+    isBrowsing = false;
+    chrome.classList.remove('visible');
+    homeEl.classList.remove('hidden');
+    proxyFrame.classList.remove('visible');
+    proxyFrame.src = 'about:blank';
+    chromeOmni.value = '';
+    finishLoadBar();
+  }
+
+  // ──────────────────────────────────────────
+  //  IFRAME EVENTS
+  // ──────────────────────────────────────────
+  proxyFrame.addEventListener('load', () => {
+    finishLoadBar();
+    try {
+      // Try to get current URL for address bar (may fail cross-origin)
+      const loc = proxyFrame.contentWindow?.location?.href;
+      if (loc && loc !== 'about:blank') {
+        // Decode the Scramjet URL back to the real URL
+        try { chromeOmni.value = scramjet.decodeUrl(loc); }
+        catch { chromeOmni.value = loc; }
+      }
+    } catch { /* cross-origin, ignore */ }
+  });
+
+  // ──────────────────────────────────────────
+  //  EVENT LISTENERS
+  // ──────────────────────────────────────────
+
+  // Omni input (home)
+  omniInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') navigate(omniInput.value);
+  });
+  goBtn.addEventListener('click', () => navigate(omniInput.value));
+
+  // Omni input (chrome bar)
+  chromeOmni.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') navigate(chromeOmni.value);
+  });
+
+  // Nav buttons
+  navBack.addEventListener('click', () => {
+    try { proxyFrame.contentWindow?.history?.back(); } catch { history.back(); }
+  });
+  navFwd.addEventListener('click', () => {
+    try { proxyFrame.contentWindow?.history?.forward(); } catch { history.forward(); }
+  });
+  navReload.addEventListener('click', () => {
+    startLoadBar();
+    try { proxyFrame.contentWindow?.location?.reload(); }
+    catch { proxyFrame.src = proxyFrame.src; }
+  });
+
+  // Home button
+  homeBtn.addEventListener('click', goHome);
+
+  // Transport/wisp settings change
+  transportSel.addEventListener('change', () => {
+    statusDot.className = 'status-dot loading';
+    statusText.textContent = 'CONFIGURING';
+    setTransport();
+  });
+
+  wispInput.addEventListener('change', () => {
+    statusDot.className = 'status-dot loading';
+    statusText.textContent = 'CONFIGURING';
+    setTransport();
+  });
+
+  // Keyboard shortcut: Escape to go home
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isBrowsing) goHome();
+    // Ctrl+L to focus address bar
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+      e.preventDefault();
+      if (isBrowsing) chromeOmni.select();
+      else omniInput.focus();
+    }
+  });
+
+  // ──────────────────────────────────────────
+  //  BOOT
+  // ──────────────────────────────────────────
+  initProxy();
+
+})();
+</script>
+</body>
+</html>

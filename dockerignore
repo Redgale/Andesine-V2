@@ -1,0 +1,33 @@
+# ── Andesine — .dockerignore ───────────────────────────────────────────────
+# Prevents these from being copied into the Docker build context,
+# keeping the image lean and avoiding accidental secret leaks.
+# ───────────────────────────────────────────────────────────────────────────
+
+# Dependencies (installed fresh inside the image)
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# Editor / OS junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local docs (not needed in the image)
+README.md

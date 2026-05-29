@@ -1,0 +1,25 @@
+{
+  "name": "andesine",
+  "version": "1.0.0",
+  "description": "Andesine — a Scramjet-powered web proxy frontend",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": ["proxy", "scramjet", "wisp", "andesine"],
+  "author": "Andesine",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "fastify": "^5.4.0",
+    "@fastify/static": "^8.2.0",
+    "@fastify/websocket": "^11.0.2",
+    "@mercuryworkshop/bare-mux": "^2.1.7",
+    "@mercuryworkshop/libcurl-transport": "^2.0.5",
+    "@mercuryworkshop/epoxy-transport": "^3.0.1",
+    "@mercuryworkshop/scramjet": "^1.1.0",
+    "@mercuryworkshop/wisp-js": "^0.4.1",
+    "ws": "^8.18.3"
+  }
+}
