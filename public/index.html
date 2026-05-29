@@ -629,7 +629,7 @@
 
 <!-- BareMux & Scramjet scripts -->
 <script src="/baremux/index.js"></script>
-<script src="/scram/scramjet.all.js"></script>
+<script src="/scram/scramjet.js"></script>
 
 <script>
 (async () => {
@@ -748,15 +748,15 @@
       }
 
       // ── Scramjet v2 controller ──────────────────────────────────────────
-      // $scramjetLoadController() is injected by /scram/scramjet.all.js
+      // $scramjetLoadController() is injected by /scram/scramjet.js
       const { ScramjetController } = $scramjetLoadController();
 
       scramjet = new ScramjetController({
         prefix: '/andesine/',
         files: {
-          wasm: '/scram/scramjet.wasm.wasm',
-          all:  '/scram/scramjet.all.js',
-          sync: '/scram/scramjet.sync.js',
+          wasm: '/scram/scramjet.wasm',
+          all:  '/scram/scramjet.js',
+          // sync was removed in scramjet v2 — bundled into scramjet.js
         },
       });
 

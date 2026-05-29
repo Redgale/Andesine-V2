@@ -61,10 +61,10 @@ console.log("  epoxy     →", epoxyPath);
 console.log("  libcurl   →", libcurlPath);
 
 const criticalFiles = [
-  // Scramjet: all three files must exist for the controller + SW to work
-  ["/scram/scramjet.all.js",   path.join(scramjetStaticPath, "scramjet.all.js")],
-  ["/scram/scramjet.wasm.wasm",path.join(scramjetStaticPath, "scramjet.wasm.wasm")],
-  ["/scram/scramjet.sync.js",  path.join(scramjetStaticPath, "scramjet.sync.js")],
+  // Scramjet v2: scramjet.all.js → scramjet.js, scramjet.wasm.wasm → scramjet.wasm
+  // scramjet.sync.js was removed in v2 — its behaviour is bundled into scramjet.js
+  ["/scram/scramjet.js",   path.join(scramjetStaticPath, "scramjet.js")],
+  ["/scram/scramjet.wasm", path.join(scramjetStaticPath, "scramjet.wasm")],
   // Transports: bare-mux dynamically imports these as ES modules
   ["/epoxy/index.mjs",         path.join(epoxyPath,   "index.mjs")],
   ["/libcurl/index.mjs",       path.join(libcurlPath, "index.mjs")],
@@ -141,8 +141,8 @@ await app.register(staticPlugin, {
 
 await app.register(staticPlugin, {
   root:            path.join(rootDir, "public"),
-  prefix:          "/",
-  decorateReply:   false,
+                   prefix:          "/",
+                   decorateReply:   false,
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────

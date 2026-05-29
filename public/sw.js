@@ -1,7 +1,7 @@
 // Andesine — Scramjet v2 Service Worker
 // Intercepts all fetch events and routes them through the Scramjet proxy engine
 
-importScripts("/scram/scramjet.all.js");
+importScripts("/scram/scramjet.js");
 
 const { ScramjetServiceWorker } = $scramjetLoadWorker();
 const scramjet = new ScramjetServiceWorker();
