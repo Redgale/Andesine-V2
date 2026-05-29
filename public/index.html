@@ -627,11 +627,12 @@
 <!-- Version badge -->
 <div class="version-badge">ANDESINE v2 · Scramjet</div>
 
-<!-- BareMux & Scramjet scripts -->
+<!-- BareMux loads as a classic script so its BareMux global is available
+     before the module script below runs (modules are deferred by default). -->
 <script src="/baremux/index.js"></script>
-<script src="/scram/scramjet.js"></script>
 
-<script>
+<!-- Main app — ES module so dynamic import() of scramjet.mjs works cleanly -->
+<script type="module">
 (async () => {
 
   // ──────────────────────────────────────────
@@ -747,22 +748,29 @@
         throw new Error('Service Workers not supported in this browser');
       }
 
-      // ── Scramjet v2 controller ──────────────────────────────────────────
-      // $scramjetLoadController() is injected by /scram/scramjet.js
-      const { ScramjetController } = $scramjetLoadController();
+      // ── Scramjet v2 ESM controller ──────────────────────────────────────
+      // v2 dropped the $scramjetLoad* global API entirely.
+      // Import ScramjetController directly from the ESM bundle instead.
+      const { ScramjetController } = await import('/scram/scramjet.mjs');
 
       scramjet = new ScramjetController({
         prefix: '/andesine/',
         files: {
           wasm: '/scram/scramjet.wasm',
-          all:  '/scram/scramjet.js',
-          // sync was removed in scramjet v2 — bundled into scramjet.js
+          // 'all' / 'sync' are gone in v2 — the ESM SW imports scramjet.mjs directly.
         },
       });
 
-      // v2: init() configures the controller.
-      // Pass the SW path so scramjet can manage SW registration internally.
-      await scramjet.init('/sw.js');
+      // Register the SW explicitly as an ES module (v2 SWs use static import,
+      // so { type: 'module' } is required — a classic SW would reject it).
+      await navigator.serviceWorker.register('/sw.js', {
+        type: 'module',
+        scope: '/',
+      });
+      await navigator.serviceWorker.ready;
+
+      // v2: init() sets up controller internals; SW is already registered above.
+      await scramjet.init();
 
       initMsg.textContent = 'CONFIGURING TRANSPORT';
 
@@ -781,29 +789,6 @@
 
     } catch (err) {
       console.error('[Andesine] Init error:', err);
-
-      // If scramjet.init() doesn't accept a SW path (older v2 builds),
-      // fall back to manual registration.
-      if (err.message && err.message.includes('argument')) {
-        console.warn('[Andesine] Retrying with manual SW registration…');
-        try {
-          await scramjet.init();
-          await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-
-          baremuxConn = new BareMux.BareMuxConnection('/baremux/worker.js');
-          await setTransport();
-
-          transportReady = true;
-          statusDot.className = 'status-dot ready';
-          statusText.textContent = 'READY';
-
-          clearTimeout(overlayTimeout);
-          setTimeout(() => dismissOverlay(), 400);
-          return;
-        } catch (e2) {
-          console.error('[Andesine] Fallback init also failed:', e2);
-        }
-      }
 
       statusDot.className = 'status-dot error';
       statusText.textContent = 'ERROR';

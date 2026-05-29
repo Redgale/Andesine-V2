@@ -61,9 +61,9 @@ console.log("  epoxy     →", epoxyPath);
 console.log("  libcurl   →", libcurlPath);
 
 const criticalFiles = [
-  // Scramjet v2: scramjet.all.js → scramjet.js, scramjet.wasm.wasm → scramjet.wasm
-  // scramjet.sync.js was removed in v2 — its behaviour is bundled into scramjet.js
-  ["/scram/scramjet.js",   path.join(scramjetStaticPath, "scramjet.js")],
+  // Scramjet v2 ESM build: scramjet.mjs (ES module, imported by the SW and controller)
+  // scramjet.js (IIFE global) and scramjet.sync.js were removed in v2.
+  ["/scram/scramjet.mjs",  path.join(scramjetStaticPath, "scramjet.mjs")],
   ["/scram/scramjet.wasm", path.join(scramjetStaticPath, "scramjet.wasm")],
   // Transports: bare-mux dynamically imports these as ES modules
   ["/epoxy/index.mjs",         path.join(epoxyPath,   "index.mjs")],
