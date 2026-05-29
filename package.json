@@ -19,6 +19,7 @@
     "@mercuryworkshop/libcurl-transport": "^2.0.5",
     "@mercuryworkshop/epoxy-transport": "^3.0.1",
     "@mercuryworkshop/scramjet": "https://github.com/MercuryWorkshop/scramjet/releases/download/v2.0.67-alpha.1/mercuryworkshop-scramjet-2.0.67-alpha.1.tgz",
+    "@mercuryworkshop/scramjet-controller": "^0.0.13",
     "@mercuryworkshop/wisp-js": "^0.4.1",
     "ws": "^8.18.3"
   }

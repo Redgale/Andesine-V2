@@ -1,23 +1,22 @@
-// Andesine — Scramjet v2 Service Worker (ES Module)
-// importScripts() + $scramjetLoadWorker() were removed in v2.
-// The SW is now a standard ES module; register it with { type: 'module' }.
+// Andesine — Service Worker (Classic Script)
+//
+// controller.sw.js is the scramjet-controller's compiled SW bundle.
+// It sets the global $scramjetController with { shouldRoute, route }
+// and registers its own install / activate / message listeners.
+// All we need to add is the fetch handler.
+//
+// IMPORTANT: register this file WITHOUT { type: 'module' } so that
+// importScripts() is available in the SW context.
 
-import { ScramjetServiceWorker } from '/scram/scramjet.mjs';
-
-const scramjet = new ScramjetServiceWorker();
+importScripts('/controller/controller.sw.js');
 
 self.addEventListener('fetch', (event) => {
-  if (scramjet.route(event)) {
-    event.respondWith(scramjet.fetch(event));
+  // $scramjetController.shouldRoute() returns true for any URL whose
+  // pathname starts with a registered controller prefix.
+  if ($scramjetController.shouldRoute(event)) {
+    event.respondWith($scramjetController.route(event));
   }
 });
 
-self.addEventListener('install', () => {
-  // Force activate immediately — no waiting for existing tabs to close.
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  // Claim all existing clients so the new SW takes effect without a reload.
-  event.waitUntil(clients.claim());
-});
+// Note: install (skipWaiting) and activate (clients.claim) are already
+// wired up inside controller.sw.js — no need to duplicate them here.

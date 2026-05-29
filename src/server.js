@@ -10,8 +10,6 @@ const rootDir   = path.join(__dirname, "..");
 const nodeModules = path.join(rootDir, "node_modules");
 
 // ── Utility: resolve a package's static dist directory ────────────────────
-// Checks dist/ first, then the package root. Logs what it finds so you can
-// verify paths in Koyeb logs without shelling into the container.
 function resolvePackageDist(pkgName) {
   const distDir  = path.join(nodeModules, pkgName, "dist");
   const pkgRoot  = path.join(nodeModules, pkgName);
@@ -24,14 +22,12 @@ function resolvePackageDist(pkgName) {
   return pkgRoot;
 }
 
-// ── Scramjet: path subexport is not guaranteed in every alpha build ────────
-// If the named export is missing / undefined / points at a non-existent dir,
-// we fall back to the standard dist/ layout used by every published release.
+// ── Scramjet: resolve the static dist directory ────────────────────────────
+// The controller-based setup needs the plain IIFE build (scramjet.js) and
+// the WASM file — both live in the standard dist/.
 let scramjetStaticPath;
 try {
   const mod = await import("@mercuryworkshop/scramjet/path");
-
-  // The module may use a named export OR a default export — handle both.
   const candidate = mod.scramjetPath ?? mod.default;
 
   if (typeof candidate === "string" && fs.existsSync(candidate)) {
@@ -47,29 +43,33 @@ try {
   scramjetStaticPath = resolvePackageDist("@mercuryworkshop/scramjet");
 }
 
-const baremuxPath = resolvePackageDist("@mercuryworkshop/bare-mux");
-const epoxyPath   = resolvePackageDist("@mercuryworkshop/epoxy-transport");
-const libcurlPath = resolvePackageDist("@mercuryworkshop/libcurl-transport");
+const controllerPath = resolvePackageDist("@mercuryworkshop/scramjet-controller");
+const baremuxPath    = resolvePackageDist("@mercuryworkshop/bare-mux");
+const epoxyPath      = resolvePackageDist("@mercuryworkshop/epoxy-transport");
+const libcurlPath    = resolvePackageDist("@mercuryworkshop/libcurl-transport");
 
-// ── Diagnostic: log every resolved path and check critical files ──────────
-// These lines appear in Koyeb → Deployments → Logs immediately on startup.
-// Check them first when debugging a blank proxy page.
+// ── Diagnostic logging ─────────────────────────────────────────────────────
 console.log("\n[Andesine] ── Static path resolution ──────────────────────────");
-console.log("  scramjet  →", scramjetStaticPath);
-console.log("  baremux   →", baremuxPath);
-console.log("  epoxy     →", epoxyPath);
-console.log("  libcurl   →", libcurlPath);
+console.log("  scramjet    →", scramjetStaticPath);
+console.log("  controller  →", controllerPath);
+console.log("  baremux     →", baremuxPath);
+console.log("  epoxy       →", epoxyPath);
+console.log("  libcurl     →", libcurlPath);
 
 const criticalFiles = [
-  // Scramjet v2 ESM build: scramjet.mjs (ES module, imported by the SW and controller)
-  // scramjet.js (IIFE global) and scramjet.sync.js were removed in v2.
-  ["/scram/scramjet.mjs",  path.join(scramjetStaticPath, "scramjet.mjs")],
-  ["/scram/scramjet.wasm", path.join(scramjetStaticPath, "scramjet.wasm")],
-  // Transports: bare-mux dynamically imports these as ES modules
-  ["/epoxy/index.mjs",         path.join(epoxyPath,   "index.mjs")],
-  ["/libcurl/index.mjs",       path.join(libcurlPath, "index.mjs")],
-  // BareMux worker: loaded by new BareMux.BareMuxConnection(...)
-  ["/baremux/worker.js",       path.join(baremuxPath, "worker.js")],
+  // Scramjet: IIFE bundle (sets globalThis.$scramjet) + WASM
+  ["/scram/scramjet.js",           path.join(scramjetStaticPath, "scramjet.js")],
+  ["/scram/scramjet.mjs",          path.join(scramjetStaticPath, "scramjet.mjs")],
+  ["/scram/scramjet.wasm",         path.join(scramjetStaticPath, "scramjet.wasm")],
+  // Controller: SW bundle, API bundle, inject bundle
+  ["/controller/controller.sw.js",     path.join(controllerPath, "controller.sw.js")],
+  ["/controller/controller.api.js",    path.join(controllerPath, "controller.api.js")],
+  ["/controller/controller.inject.js", path.join(controllerPath, "controller.inject.js")],
+  // Transports: loaded via dynamic import() in the browser
+  ["/epoxy/index.mjs",             path.join(epoxyPath,   "index.mjs")],
+  ["/libcurl/index.mjs",           path.join(libcurlPath, "index.mjs")],
+  // BareMux worker (kept for optional use, not required by the controller path)
+  ["/baremux/worker.js",           path.join(baremuxPath, "worker.js")],
 ];
 
 console.log("[Andesine] ── Key file check ───────────────────────────────────");
@@ -93,13 +93,8 @@ const PORT = process.env.PORT || 3000;
 const app  = Fastify({ logger: false });
 
 // ── MIME type enforcement ─────────────────────────────────────────────────
-// CRITICAL — without these headers browsers hard-reject:
-//   • dynamic import() of .mjs served as application/octet-stream
-//   • WebAssembly.instantiateStreaming() of .wasm served as anything other than application/wasm
-//
-// @fastify/static delegates to the `mime` npm package; older mime-db versions
-// omit .mjs and older Node builds may send the wrong type for .wasm.
-// This hook runs before every response and guarantees correctness.
+// .mjs must be served as text/javascript for dynamic import() to work.
+// .wasm must be served as application/wasm for WebAssembly.instantiateStreaming().
 app.addHook("onSend", async (request, reply, payload) => {
   const url = request.url.split("?")[0];
   if (url.endsWith(".mjs")) {
@@ -111,38 +106,43 @@ app.addHook("onSend", async (request, reply, payload) => {
 });
 
 // ── Static file registrations ─────────────────────────────────────────────
-// Rule: the FIRST @fastify/static registration must NOT set decorateReply: false
-// (it defaults to true). Every subsequent registration must set it to false to
-// avoid "Reply already decorated with 'sendFile'" errors.
+// Rule: the FIRST registration omits decorateReply (defaults to true).
+// Every subsequent registration must set decorateReply: false.
 
 await app.register(staticPlugin, {
   root:   scramjetStaticPath,
   prefix: "/scram/",
-  // decorateReply defaults to true — intentionally omitted here
+  // decorateReply: true (default) — intentionally omitted on the first registration
 });
 
 await app.register(staticPlugin, {
-  root:            baremuxPath,
-  prefix:          "/baremux/",
-  decorateReply:   false,
+  root:          controllerPath,
+  prefix:        "/controller/",
+  decorateReply: false,
 });
 
 await app.register(staticPlugin, {
-  root:            epoxyPath,
-  prefix:          "/epoxy/",
-  decorateReply:   false,
+  root:          baremuxPath,
+  prefix:        "/baremux/",
+  decorateReply: false,
 });
 
 await app.register(staticPlugin, {
-  root:            libcurlPath,
-  prefix:          "/libcurl/",
-  decorateReply:   false,
+  root:          epoxyPath,
+  prefix:        "/epoxy/",
+  decorateReply: false,
 });
 
 await app.register(staticPlugin, {
-  root:            path.join(rootDir, "public"),
-                   prefix:          "/",
-                   decorateReply:   false,
+  root:          libcurlPath,
+  prefix:        "/libcurl/",
+  decorateReply: false,
+});
+
+await app.register(staticPlugin, {
+  root:          path.join(rootDir, "public"),
+  prefix:        "/",
+  decorateReply: false,
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────

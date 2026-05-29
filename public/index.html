@@ -627,11 +627,14 @@
 <!-- Version badge -->
 <div class="version-badge">ANDESINE v2 · Scramjet</div>
 
-<!-- BareMux loads as a classic script so its BareMux global is available
-     before the module script below runs (modules are deferred by default). -->
-<script src="/baremux/index.js"></script>
 
-<!-- Main app — ES module so dynamic import() of scramjet.mjs works cleanly -->
+<!-- Scramjet v2 IIFE bundle — sets globalThis.$scramjet -->
+<script src="/scram/scramjet.js"></script>
+
+<!-- Scramjet Controller API — sets globalThis.$scramjetController.Controller/Frame -->
+<script src="/controller/controller.api.js"></script>
+
+<!-- Main app — module so top-level await and dynamic import() work -->
 <script type="module">
 (async () => {
 
@@ -723,14 +726,18 @@
   }
 
   // ──────────────────────────────────────────
-  //  SCRAMJET v2 INIT
+  //  SCRAMJET CONTROLLER INIT
   // ──────────────────────────────────────────
-  let scramjet      = null;
-  let baremuxConn   = null;
+  // $scramjet       is set by /scram/scramjet.js       (IIFE, loads globalThis.$scramjet)
+  // $scramjetController is set by /controller/controller.api.js (IIFE, Controller/Frame)
+  //
+  // The Controller manages its own transport directly — no BareMux needed.
+
+  let controller    = null;   // Controller instance
+  let frame         = null;   // Frame instance (wraps the proxy iframe)
   let transportReady = false;
 
-  // Safety net: no matter what happens in initProxy(), the overlay is always
-  // dismissed within 6 seconds so the UI is never permanently locked out.
+  // Safety net: dismiss overlay after 8 s regardless of outcome.
   const overlayTimeout = setTimeout(() => {
     if (overlay.parentNode) {
       initMsg.textContent = 'READY (DEGRADED)';
@@ -738,7 +745,38 @@
       statusDot.className = 'status-dot error';
       statusText.textContent = 'INIT TIMEOUT';
     }
-  }, 6000);
+  }, 8000);
+
+  // Build a transport from the current UI selections.
+  // Returns a ProxyTransport that has already had .init() called.
+  async function buildTransport(wispUrl) {
+    const transportType = transportSel.value;
+    try {
+      if (transportType === 'epoxy') {
+        const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
+        const t = new EpoxyTransport({ wisp: wispUrl });
+        await t.init();
+        return t;
+      } else {
+        // libcurl ships default export AND named export — default is safest
+        const mod = await import('/libcurl/index.mjs');
+        const LibcurlClient = mod.default ?? mod.LibcurlClient;
+        const t = new LibcurlClient({ wisp: wispUrl });
+        await t.init();
+        return t;
+      }
+    } catch (err) {
+      // If the user's custom Wisp failed, retry with the public fallback
+      if (wispUrl !== 'wss://wisp.mercurywork.shop/') {
+        console.warn('[Andesine] Transport init failed, trying public Wisp:', err);
+        const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
+        const t = new EpoxyTransport({ wisp: 'wss://wisp.mercurywork.shop/' });
+        await t.init();
+        return t;
+      }
+      throw err;
+    }
+  }
 
   async function initProxy() {
     initMsg.textContent = 'REGISTERING SERVICE WORKER';
@@ -748,37 +786,48 @@
         throw new Error('Service Workers not supported in this browser');
       }
 
-      // ── Scramjet v2 ESM controller ──────────────────────────────────────
-      // v2 dropped the $scramjetLoad* global API entirely.
-      // Import ScramjetController directly from the ESM bundle instead.
-      const { ScramjetController } = await import('/scram/scramjet.mjs');
+      // ── Service worker ───────────────────────────────────────────────────
+      // sw.js is now a classic script (importScripts controller.sw.js).
+      // Do NOT pass { type: 'module' } — classic SWs can use importScripts().
+      await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      const readyReg = await navigator.serviceWorker.ready;
+      const sw = readyReg.active;
 
-      scramjet = new ScramjetController({
-        prefix: '/andesine/',
-        files: {
-          wasm: '/scram/scramjet.wasm',
-          // 'all' / 'sync' are gone in v2 — the ESM SW imports scramjet.mjs directly.
-        },
-      });
-
-      // Register the SW explicitly as an ES module (v2 SWs use static import,
-      // so { type: 'module' } is required — a classic SW would reject it).
-      await navigator.serviceWorker.register('/sw.js', {
-        type: 'module',
-        scope: '/',
-      });
-      await navigator.serviceWorker.ready;
-
-      // v2: init() sets up controller internals; SW is already registered above.
-      await scramjet.init();
+      if (!sw) {
+        throw new Error('Service worker did not become active');
+      }
 
       initMsg.textContent = 'CONFIGURING TRANSPORT';
 
-      // ── BareMux transport ───────────────────────────────────────────────
-      baremuxConn = new BareMux.BareMuxConnection('/baremux/worker.js');
-      await setTransport();
+      // ── Transport ────────────────────────────────────────────────────────
+      const wispUrl = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
+      const transport = await buildTransport(wispUrl);
 
-      // ── Overlay out — UI is now interactive ────────────────────────────
+      // ── Controller ───────────────────────────────────────────────────────
+      // Paths must match what server.js actually serves:
+      //   /scram/ → scramjet dist   (scramjet.js, scramjet.wasm)
+      //   /controller/ → scramjet-controller dist (controller.inject.js)
+      const { Controller } = $scramjetController;
+      controller = new Controller({
+        serviceworker: sw,
+        transport,
+        config: {
+          scramjetPath:    '/scram/scramjet.js',
+          wasmPath:        '/scram/scramjet.wasm',
+          injectPath:      '/controller/controller.inject.js',
+          virtualWasmPath: 'scramjet.wasm.js',
+        },
+      });
+
+      // wait() resolves once the SW has acknowledged the controller
+      // and the WASM has been fetched.
+      await controller.wait();
+
+      // ── Frame ────────────────────────────────────────────────────────────
+      // createFrame() wraps the existing <iframe> element.
+      frame = controller.createFrame(proxyFrame);
+
+      // ── Ready ────────────────────────────────────────────────────────────
       transportReady = true;
       statusDot.className = 'status-dot ready';
       statusText.textContent = 'READY';
@@ -800,37 +849,25 @@
     }
   }
 
+  // Hot-swap the transport (called when the user changes the transport/wisp).
   async function setTransport() {
-    if (!baremuxConn) return;
-    const transport = transportSel.value;
-    const wispUrl   = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
+    if (!controller) return;
+    const wispUrl = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
+    statusDot.className = 'status-dot loading';
+    statusText.textContent = 'CONFIGURING';
 
     try {
-      if (transport === 'epoxy') {
-        await baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: wispUrl }]);
-      } else {
-        await baremuxConn.setTransport('/libcurl/index.mjs', [{ wisp: wispUrl }]);
-      }
+      const transport = await buildTransport(wispUrl);
+      controller.setTransport(transport);
       statusDot.className = 'status-dot ready';
       statusText.textContent = 'READY';
-      showToast(`Transport: ${transport.toUpperCase()} · Wisp: ${wispUrl}`);
+      showToast(`Transport: ${transportSel.value.toUpperCase()} · Wisp: ${wispUrl}`);
     } catch (err) {
+      console.error('[Andesine] Transport swap failed:', err);
       statusDot.className = 'status-dot error';
       statusText.textContent = 'TRANSPORT ERR';
-      showToast('Transport failed, trying fallback…', true);
-
-      // Fallback to public Wisp endpoint
-      try {
-        await baremuxConn.setTransport('/epoxy/index.mjs', [{ wisp: 'wss://wisp.mercurywork.shop/' }]);
-        statusDot.className = 'status-dot ready';
-        statusText.textContent = 'FALLBACK OK';
-        showToast('Using fallback: wss://wisp.mercurywork.shop/');
-      } catch (e2) {
-        console.error('[Andesine] Fallback transport failed:', e2);
-        statusDot.className = 'status-dot error';
-        statusText.textContent = 'NO TRANSPORT';
-        transportReady = false;
-      }
+      showToast('Transport failed: ' + err.message, true);
+      transportReady = false;
     }
   }
 
@@ -843,7 +880,7 @@
     const url = normalizeUrl(rawUrl);
     if (!url) { showToast('Enter a URL or search term', true); return; }
 
-    if (!transportReady || !scramjet) {
+    if (!transportReady || !frame) {
       showToast('Proxy not ready yet — please wait', true);
       return;
     }
@@ -859,8 +896,9 @@
     }
 
     try {
-      const encoded = scramjet.encodeUrl(url);
-      proxyFrame.src = encoded;
+      // frame.go() rewrites the URL through the scramjet codec and sets
+      // frame.element.src — no need to touch proxyFrame.src directly.
+      frame.go(url);
     } catch (err) {
       console.error('[Andesine] Navigation error:', err);
       showToast('Navigation failed: ' + err.message, true);
@@ -885,9 +923,18 @@
     finishLoadBar();
     try {
       const loc = proxyFrame.contentWindow?.location?.href;
-      if (loc && loc !== 'about:blank') {
-        try { chromeOmni.value = scramjet.decodeUrl(loc); }
-        catch { chromeOmni.value = loc; }
+      if (loc && loc !== 'about:blank' && frame) {
+        // The controller prefix looks like /~/sj/{ctrlId}/{frameId}/
+        // Everything after it is encodeURIComponent(originalUrl)
+        const prefix = frame.prefix;
+        let displayUrl = loc;
+        try {
+          const path = new URL(loc, location.href).pathname;
+          if (path.startsWith(prefix)) {
+            displayUrl = decodeURIComponent(path.slice(prefix.length));
+          }
+        } catch { /* leave displayUrl as loc */ }
+        chromeOmni.value = displayUrl;
       }
     } catch { /* cross-origin — ignore */ }
   });
@@ -907,33 +954,24 @@
     if (e.key === 'Enter') navigate(chromeOmni.value);
   });
 
-  // Nav buttons
+  // Nav buttons — delegate to the Frame so scramjet can hook history/location
   navBack.addEventListener('click', () => {
-    try { proxyFrame.contentWindow?.history?.back(); } catch { history.back(); }
+    if (frame) frame.back(); else try { history.back(); } catch {}
   });
   navFwd.addEventListener('click', () => {
-    try { proxyFrame.contentWindow?.history?.forward(); } catch { history.forward(); }
+    if (frame) frame.forward(); else try { history.forward(); } catch {}
   });
   navReload.addEventListener('click', () => {
     startLoadBar();
-    try { proxyFrame.contentWindow?.location?.reload(); }
-    catch { proxyFrame.src = proxyFrame.src; }
+    if (frame) frame.reload(); else proxyFrame.src = proxyFrame.src;
   });
 
   // Home button
   homeBtn.addEventListener('click', goHome);
 
-  // Transport / Wisp changes
-  transportSel.addEventListener('change', () => {
-    statusDot.className = 'status-dot loading';
-    statusText.textContent = 'CONFIGURING';
-    setTransport();
-  });
-  wispInput.addEventListener('change', () => {
-    statusDot.className = 'status-dot loading';
-    statusText.textContent = 'CONFIGURING';
-    setTransport();
-  });
+  // Transport / Wisp changes — hot-swap via controller.setTransport()
+  transportSel.addEventListener('change', setTransport);
+  wispInput.addEventListener('change', setTransport);
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
