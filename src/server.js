@@ -1,7 +1,9 @@
 import Fastify from "fastify";
 import staticPlugin from "@fastify/static";
 import { server as wispServer } from "@mercuryworkshop/wisp-js/server";
-import { scramjetPath } from "@mercuryworkshop/scramjet/path";
+// scramjet v2: path export moved to package root. If this import fails after
+// npm install, try: import { scramjetPath } from "@mercuryworkshop/scramjet/path";
+import { scramjetPath } from "@mercuryworkshop/scramjet";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -9,9 +11,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.join(__dirname, "..");
 const nodeModules = path.join(rootDir, "node_modules");
 
-const baremuxPath = path.join(nodeModules, "@mercuryworkshop/bare-mux/dist");
-const epoxyPath = path.join(nodeModules, "@mercuryworkshop/epoxy-transport/dist");
-const libcurlPath = path.join(nodeModules, "@mercuryworkshop/libcurl-transport/dist");
+const baremuxPath  = path.join(nodeModules, "@mercuryworkshop/bare-mux/dist");
+const epoxyPath    = path.join(nodeModules, "@mercuryworkshop/epoxy-transport/dist");
+const libcurlPath  = path.join(nodeModules, "@mercuryworkshop/libcurl-transport/dist");
 
 const PORT = process.env.PORT || 3000;
 
