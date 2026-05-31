@@ -11,25 +11,18 @@ const nodeModules = path.join(rootDir, "node_modules");
 
 // ── Utility: resolve a package's static dist directory ────────────────────
 function resolvePackageDist(pkgName) {
-  const distDir  = path.join(nodeModules, pkgName, "dist");
-  const pkgRoot  = path.join(nodeModules, pkgName);
-
-  if (fs.existsSync(distDir)) {
-    return distDir;
-  }
-
+  const distDir = path.join(nodeModules, pkgName, "dist");
+  const pkgRoot = path.join(nodeModules, pkgName);
+  if (fs.existsSync(distDir)) return distDir;
   console.warn(`[Andesine] ${pkgName}: no dist/ found, falling back to package root`);
   return pkgRoot;
 }
 
 // ── Scramjet: resolve the static dist directory ────────────────────────────
-// The controller-based setup needs the plain IIFE build (scramjet.js) and
-// the WASM file — both live in the standard dist/.
 let scramjetStaticPath;
 try {
   const mod = await import("@mercuryworkshop/scramjet/path");
   const candidate = mod.scramjetPath ?? mod.default;
-
   if (typeof candidate === "string" && fs.existsSync(candidate)) {
     scramjetStaticPath = candidate;
   } else {
@@ -57,19 +50,15 @@ console.log("  epoxy       →", epoxyPath);
 console.log("  libcurl     →", libcurlPath);
 
 const criticalFiles = [
-  // Scramjet: IIFE bundle (sets globalThis.$scramjet) + WASM
-  ["/scram/scramjet.js",           path.join(scramjetStaticPath, "scramjet.js")],
-  ["/scram/scramjet.mjs",          path.join(scramjetStaticPath, "scramjet.mjs")],
-  ["/scram/scramjet.wasm",         path.join(scramjetStaticPath, "scramjet.wasm")],
-  // Controller: SW bundle, API bundle, inject bundle
+  ["/scram/scramjet.js",               path.join(scramjetStaticPath, "scramjet.js")],
+  ["/scram/scramjet.mjs",              path.join(scramjetStaticPath, "scramjet.mjs")],
+  ["/scram/scramjet.wasm",             path.join(scramjetStaticPath, "scramjet.wasm")],
   ["/controller/controller.sw.js",     path.join(controllerPath, "controller.sw.js")],
   ["/controller/controller.api.js",    path.join(controllerPath, "controller.api.js")],
   ["/controller/controller.inject.js", path.join(controllerPath, "controller.inject.js")],
-  // Transports: loaded via dynamic import() in the browser
-  ["/epoxy/index.mjs",             path.join(epoxyPath,   "index.mjs")],
-  ["/libcurl/index.mjs",           path.join(libcurlPath, "index.mjs")],
-  // BareMux worker (kept for optional use, not required by the controller path)
-  ["/baremux/worker.js",           path.join(baremuxPath, "worker.js")],
+  ["/epoxy/index.mjs",                 path.join(epoxyPath,   "index.mjs")],
+  ["/libcurl/index.mjs",               path.join(libcurlPath, "index.mjs")],
+  ["/baremux/worker.js",               path.join(baremuxPath, "worker.js")],
 ];
 
 console.log("[Andesine] ── Key file check ───────────────────────────────────");
@@ -79,8 +68,7 @@ for (const [url, absPath] of criticalFiles) {
   if (!exists) {
     const dir = path.dirname(absPath);
     if (fs.existsSync(dir)) {
-      const files = fs.readdirSync(dir);
-      console.log(`      ↳ dir contains: ${files.join(", ")}`);
+      console.log(`      ↳ dir contains: ${fs.readdirSync(dir).join(", ")}`);
     } else {
       console.log(`      ↳ parent dir does not exist: ${dir}`);
     }
@@ -88,31 +76,235 @@ for (const [url, absPath] of criticalFiles) {
 }
 console.log("[Andesine] ────────────────────────────────────────────────────\n");
 
+// ── Read index.html template once at startup ──────────────────────────────
+const indexHtmlPath     = path.join(rootDir, "public", "index.html");
+const indexHtmlTemplate = fs.readFileSync(indexHtmlPath, "utf8");
+
+// ── Server-origin helper (handles Koyeb reverse-proxy headers) ────────────
+function getServerOrigin(request) {
+  const proto = (request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim()
+    || request.protocol
+    || "https";
+  const host  = (request.headers["x-forwarded-host"] ?? "").split(",")[0].trim()
+    || request.hostname;
+  return `${proto}://${host}`;
+}
+
+// ── /proxy-engine page ────────────────────────────────────────────────────
+// Lives on the real koyeb.app origin so it can:
+//   • register the service worker (same-origin requirement satisfied)
+//   • initialise the scramjet Controller
+//   • relay navigation/events to the blob-origin parent via postMessage
+function buildProxyEngineHtml() {
+  return /* html */`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; background: transparent; }
+    #proxy-frame {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #fff;
+    }
+  </style>
+  <!-- Scramjet IIFE — sets globalThis.$scramjet -->
+  <script src="/scram/scramjet.js"></script>
+  <!-- Controller API — sets globalThis.$scramjetController -->
+  <script src="/controller/controller.api.js"></script>
+</head>
+<body>
+  <!--
+    allow-pointer-lock  : lets pages inside the proxy request pointer lock
+    allow-same-origin   : required so the SW can intercept requests on the same origin
+    allow="pointer-lock *" is set via the allow attribute on this element too
+  -->
+  <iframe
+    id="proxy-frame"
+    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
+    allow="pointer-lock *"
+  ></iframe>
+
+  <script type="module">
+  (async () => {
+    // ── Helpers ─────────────────────────────────────────────────────────
+    function send(msg) {
+      try { window.parent.postMessage(msg, "*"); } catch (_) {}
+    }
+
+    let controller = null;
+    let frame      = null;
+    let ready      = false;
+
+    // ── Transport builder ────────────────────────────────────────────────
+    async function buildTransport(wispUrl, type) {
+      if (type === "libcurl") {
+        const mod = await import("/libcurl/index.mjs");
+        const LibcurlClient = mod.default ?? mod.LibcurlClient;
+        const t = new LibcurlClient({ wisp: wispUrl });
+        await t.init();
+        return t;
+      }
+      const { default: EpoxyTransport } = await import("/epoxy/index.mjs");
+      const t = new EpoxyTransport({ wisp: wispUrl });
+      await t.init();
+      return t;
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────────
+    async function init({ wispUrl = "wss://wisp.mercurywork.shop/", transportType = "epoxy" } = {}) {
+      try {
+        send({ type: "STATUS", msg: "REGISTERING SERVICE WORKER" });
+
+        if (!("serviceWorker" in navigator)) throw new Error("Service Workers not supported");
+
+        await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+        const reg = await navigator.serviceWorker.ready;
+        const sw  = reg.active;
+        if (!sw) throw new Error("Service worker did not activate");
+
+        send({ type: "STATUS", msg: "CONFIGURING TRANSPORT" });
+
+        let transport;
+        let effectiveWisp = wispUrl;
+        try {
+          transport = await buildTransport(wispUrl, transportType);
+        } catch (err) {
+          console.warn("[proxy-engine] Transport failed, falling back to public wisp:", err);
+          effectiveWisp = "wss://wisp.mercurywork.shop/";
+          transport = await buildTransport(effectiveWisp, "epoxy");
+          send({ type: "TRANSPORT_FALLBACK", wispUrl: effectiveWisp });
+        }
+
+        send({ type: "STATUS", msg: "INITIALIZING CONTROLLER" });
+
+        const { Controller } = $scramjetController;
+        const proxyFrame = document.getElementById("proxy-frame");
+
+        controller = new Controller({
+          serviceworker: sw,
+          transport,
+          config: {
+            scramjetPath:    "/scram/scramjet.js",
+            wasmPath:        "/scram/scramjet.wasm",
+            injectPath:      "/controller/controller.inject.js",
+            virtualWasmPath: "scramjet.wasm.js",
+          },
+        });
+
+        await controller.wait();
+        frame = controller.createFrame(proxyFrame);
+        ready = true;
+
+        send({ type: "READY" });
+
+        // ── URL tracking ─────────────────────────────────────────────────
+        proxyFrame.addEventListener("load", () => {
+          send({ type: "LOAD_COMPLETE" });
+          try {
+            const loc = proxyFrame.contentWindow?.location?.href;
+            if (loc && loc !== "about:blank" && frame) {
+              const prefix = frame.prefix;
+              let displayUrl = loc;
+              try {
+                const p = new URL(loc, location.href).pathname;
+                if (p.startsWith(prefix)) displayUrl = decodeURIComponent(p.slice(prefix.length));
+              } catch (_) {}
+              send({ type: "URL_CHANGE", url: displayUrl });
+            }
+          } catch (_) {}
+        });
+
+        // ── Pointer-lock relay ────────────────────────────────────────────
+        document.addEventListener("pointerlockchange", () => {
+          send({ type: "POINTER_LOCK", locked: document.pointerLockElement !== null });
+        });
+
+      } catch (err) {
+        console.error("[proxy-engine] Init error:", err);
+        send({ type: "ERROR", message: err.message });
+      }
+    }
+
+    // ── Command listener ─────────────────────────────────────────────────
+    window.addEventListener("message", async (e) => {
+      const data = e.data;
+      if (!data || typeof data !== "object") return;
+      switch (data.type) {
+        case "INIT":        await init(data); break;
+        case "NAVIGATE":    if (frame && ready) frame.go(data.url); break;
+        case "BACK":        if (frame) frame.back();    break;
+        case "FORWARD":     if (frame) frame.forward(); break;
+        case "RELOAD":      if (frame) frame.reload();  break;
+        case "SET_TRANSPORT":
+          if (controller) {
+            try {
+              const t = await buildTransport(data.wispUrl, data.transportType);
+              controller.setTransport(t);
+              send({ type: "TRANSPORT_OK" });
+            } catch (err) {
+              send({ type: "TRANSPORT_ERR", message: err.message });
+            }
+          }
+          break;
+      }
+    });
+
+    // Signal ready to receive INIT command
+    send({ type: "ENGINE_LOADED" });
+  })();
+  </script>
+</body>
+</html>`;
+}
+
 // ── Server ────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const app  = Fastify({ logger: false });
 
 // ── MIME type enforcement ─────────────────────────────────────────────────
-// .mjs must be served as text/javascript for dynamic import() to work.
-// .wasm must be served as application/wasm for WebAssembly.instantiateStreaming().
 app.addHook("onSend", async (request, reply, payload) => {
   const url = request.url.split("?")[0];
-  if (url.endsWith(".mjs")) {
-    reply.header("Content-Type", "text/javascript; charset=utf-8");
-  } else if (url.endsWith(".wasm")) {
-    reply.header("Content-Type", "application/wasm");
-  }
+  if (url.endsWith(".mjs"))  reply.header("Content-Type", "text/javascript; charset=utf-8");
+  if (url.endsWith(".wasm")) reply.header("Content-Type", "application/wasm");
   return payload;
 });
 
+// ── Dynamic GET / ─────────────────────────────────────────────────────────
+// Injects <base href> + window.ANDESINE_SERVER so that when index.html is
+// fetched and turned into a blob:// URL, all relative asset paths still
+// resolve to the real koyeb.app origin, and the UI shell knows where to
+// point the /proxy-engine iframe.
+// Registered BEFORE the static plugin so this route wins.
+app.get("/", async (request, reply) => {
+  const serverOrigin = getServerOrigin(request);
+  const injection =
+    `\n  <base href="${serverOrigin}/">\n` +
+    `  <script>window.ANDESINE_SERVER = ${JSON.stringify(serverOrigin)};</script>\n`;
+  const html = indexHtmlTemplate.replace(/(<head[^>]*>)/i, `$1${injection}`);
+  reply.header("Content-Type", "text/html; charset=utf-8").send(html);
+});
+
+// ── GET /proxy-engine ─────────────────────────────────────────────────────
+// Same-origin host page that owns the service worker + scramjet controller.
+// The blob-URL shell embeds this in an iframe and talks to it via postMessage.
+app.get("/proxy-engine", async (_request, reply) => {
+  reply
+    .header("Content-Type", "text/html; charset=utf-8")
+    .send(buildProxyEngineHtml());
+});
+
 // ── Static file registrations ─────────────────────────────────────────────
-// Rule: the FIRST registration omits decorateReply (defaults to true).
-// Every subsequent registration must set decorateReply: false.
+// Rule: first registration omits decorateReply (defaults to true);
+// every subsequent one sets decorateReply: false.
 
 await app.register(staticPlugin, {
   root:   scramjetStaticPath,
   prefix: "/scram/",
-  // decorateReply: true (default) — intentionally omitted on the first registration
 });
 
 await app.register(staticPlugin, {
