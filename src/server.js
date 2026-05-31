@@ -80,6 +80,71 @@ console.log("[Andesine] ──────────────────�
 const indexHtmlPath     = path.join(rootDir, "public", "index.html");
 const indexHtmlTemplate = fs.readFileSync(indexHtmlPath, "utf8");
 
+// ── Pre-read and inline controller.sw.js ─────────────────────────────────
+//
+// WHY THIS EXISTS:
+// When the UI runs from a blob URL, browser extensions (uBlock Origin,
+// Privacy Badger, etc.) that implement webRequest / declarativeNetRequest
+// can intercept and block two separate HTTP fetches that normally occur
+// during SW bootstrap:
+//
+//   1. navigator.serviceWorker.register('/sw.js')    ← browser fetches /sw.js
+//   2. importScripts('/controller/controller.sw.js') ← fetch inside the SW
+//
+// Both are real HTTP/HTTPS requests that extensions can pattern-match and
+// kill, causing the entire proxy init to fail silently.
+//
+// THE FIX:
+// Read controller.sw.js from disk here at server startup and stitch it
+// together with the fetch-routing handler into a single COMBINED_SW_SOURCE
+// string.  That string is then JSON-serialised into the proxy-engine HTML
+// response as a plain string literal, requiring ZERO extra HTTP fetches.
+//
+// On the client, registration becomes:
+//
+//   const blob  = new Blob([COMBINED_SW_SOURCE], { type: 'text/javascript' });
+//   const swUrl = URL.createObjectURL(blob);          // in-process, no network
+//   navigator.serviceWorker.register(swUrl, { scope: '/' });
+//
+// URL.createObjectURL() is a synchronous, in-process call — it produces a
+// blob: URI that inherits the creating document's real origin
+// (e.g. blob:https://your-app.koyeb.app/...).  The browser's internal
+// resolution of a blob: SW URL is opaque to webRequest / declarativeNetRequest,
+// so there is nothing for extensions to intercept.
+//
+// /sw.js is kept as a hard-refresh / direct-navigation fallback.
+// ─────────────────────────────────────────────────────────────────────────
+
+let controllerSwInline = "";
+const controllerSwFile = path.join(controllerPath, "controller.sw.js");
+try {
+  if (fs.existsSync(controllerSwFile)) {
+    controllerSwInline = fs.readFileSync(controllerSwFile, "utf8");
+    console.log("[Andesine] controller.sw.js read for inline embedding ✓");
+  } else {
+    console.warn("[Andesine] controller.sw.js not found — blob SW will be skipped; falling back to /sw.js");
+  }
+} catch (err) {
+  console.warn("[Andesine] Could not read controller.sw.js:", err.message, "— falling back to /sw.js");
+}
+
+// Combined SW source: controller bundle first (sets self.$scramjetController
+// and wires install / activate / message handlers), then our fetch handler.
+// Written as a classic (non-module) SW — no top-level await, no import().
+const COMBINED_SW_SOURCE = [
+  "// Andesine — Combined Service Worker (server-inlined, extension-proof)",
+  "// controller.sw.js sets self.$scramjetController; wires install + activate.",
+  "",
+  controllerSwInline,
+  "",
+  "// Fetch routing — $scramjetController is available from the inlined bundle above.",
+  "self.addEventListener('fetch', function (event) {",
+  "  if (typeof $scramjetController !== 'undefined' && $scramjetController.shouldRoute(event)) {",
+  "    event.respondWith($scramjetController.route(event));",
+  "  }",
+  "});",
+].join("\n");
+
 // ── Server-origin helper (handles Koyeb reverse-proxy headers) ────────────
 function getServerOrigin(request) {
   const proto = (request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim()
@@ -96,6 +161,12 @@ function getServerOrigin(request) {
 //   • initialise the scramjet Controller
 //   • relay navigation/events to the blob-origin parent via postMessage
 function buildProxyEngineHtml() {
+  // JSON.stringify safely encodes the raw JS source into a string literal
+  // that can be embedded directly in a <script> block without XSS risk.
+  // The browser decodes it back to a string; we pass that to Blob — no HTTP.
+  const swCodeLiteral = JSON.stringify(COMBINED_SW_SOURCE);
+  const hasSWInline   = controllerSwInline.length > 0;
+
   return /* html */`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -130,6 +201,13 @@ function buildProxyEngineHtml() {
   ></iframe>
 
   <script type="module">
+  // ── Inlined SW source ────────────────────────────────────────────────────
+  // controller.sw.js + our fetch handler, baked into this HTML at server
+  // startup.  Registering via Blob avoids every network request extensions
+  // could intercept (no /sw.js fetch, no importScripts fetch inside the SW).
+  const __SW_SOURCE__   = ${swCodeLiteral};
+  const __SW_HAS_CODE__ = ${hasSWInline};
+
   (async () => {
     // ── Helpers ─────────────────────────────────────────────────────────
     function send(msg) {
@@ -155,17 +233,59 @@ function buildProxyEngineHtml() {
       return t;
     }
 
+    // ── Service Worker registration ───────────────────────────────────────
+    //
+    // Strategy:
+    //
+    //   PRIMARY — Blob URL (extension-proof):
+    //     URL.createObjectURL() is an in-process, synchronous call.
+    //     Extensions' webRequest / declarativeNetRequest hooks only fire on
+    //     real HTTP/HTTPS traffic; they cannot see blob object creation or
+    //     the browser's internal resolution of a blob: SW URL.
+    //     The resulting blob: URL inherits this page's real origin so the
+    //     browser accepts scope "/" without complaint.
+    //
+    //   FALLBACK — /sw.js file path:
+    //     Used when __SW_HAS_CODE__ is false (controller.sw.js was missing
+    //     from disk at server startup) or if Blob construction throws for
+    //     any browser-specific reason.
+    //
+    async function registerServiceWorker() {
+      if (!("serviceWorker" in navigator)) {
+        throw new Error("Service Workers not supported");
+      }
+
+      if (__SW_HAS_CODE__) {
+        try {
+          const blob  = new Blob([__SW_SOURCE__], { type: "text/javascript" });
+          const swUrl = URL.createObjectURL(blob);
+          // Do NOT revoke swUrl — the browser may need it to verify / update
+          // the SW script.  It is released automatically when the page unloads.
+          await navigator.serviceWorker.register(swUrl, { scope: "/" });
+          console.log("[proxy-engine] SW registered via blob URL (extension-proof) ✓");
+        } catch (blobErr) {
+          // Blob path failed — fall through to the file-based URL.
+          console.warn("[proxy-engine] Blob SW registration failed, falling back to /sw.js:", blobErr.message);
+          await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+        }
+      } else {
+        // No inline code available (server startup couldn't read the file).
+        console.warn("[proxy-engine] No inline SW code; using /sw.js fallback");
+        await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      }
+
+      const reg = await navigator.serviceWorker.ready;
+      const sw  = reg.active;
+      if (!sw) throw new Error("Service worker did not activate");
+      return sw;
+    }
+
     // ── Init ─────────────────────────────────────────────────────────────
     async function init({ wispUrl = "wss://wisp.mercurywork.shop/", transportType = "epoxy" } = {}) {
       try {
         send({ type: "STATUS", msg: "REGISTERING SERVICE WORKER" });
 
-        if (!("serviceWorker" in navigator)) throw new Error("Service Workers not supported");
-
-        await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-        const reg = await navigator.serviceWorker.ready;
-        const sw  = reg.active;
-        if (!sw) throw new Error("Service worker did not activate");
+        const sw = await registerServiceWorker();
 
         send({ type: "STATUS", msg: "CONFIGURING TRANSPORT" });
 
