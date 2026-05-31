@@ -393,8 +393,10 @@
       box-shadow: 0 0 8px var(--red);
     }
 
-    /* === PROXY IFRAME === */
-    #proxy-frame {
+    /* === PROXY ENGINE IFRAME === */
+    /* This iframe lives on the real koyeb.app origin and owns the SW + controller. */
+    /* It is always present in the DOM (so the SW stays alive) but invisible until browsing starts. */
+    #proxy-engine {
       position: fixed;
       top: 48px;
       left: 0;
@@ -404,16 +406,38 @@
       width: 100%;
       height: calc(100% - 48px);
       z-index: 50;
-      background: white;
       opacity: 0;
       transition: opacity 0.3s;
       pointer-events: none;
+      background: transparent;
     }
 
-    #proxy-frame.visible {
+    #proxy-engine.visible {
       opacity: 1;
       pointer-events: all;
     }
+
+    /* === POINTER LOCK BADGE === */
+    #pointer-lock-badge {
+      position: fixed;
+      top: 56px;
+      right: 16px;
+      z-index: 210;
+      background: rgba(196, 31, 31, 0.92);
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 4px;
+      border: 1px solid rgba(232, 50, 50, 0.5);
+      display: none;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #pointer-lock-badge.active { display: block; }
 
     /* === INIT OVERLAY === */
     #init-overlay {
@@ -427,7 +451,6 @@
       flex-direction: column;
       gap: 20px;
       transition: opacity 0.5s;
-      /* Explicit: overlay intercepts pointer events only while visible */
       pointer-events: all;
     }
 
@@ -482,46 +505,6 @@
     #toast.show { transform: translateX(-50%) translateY(0); }
     #toast.error { color: var(--red-bright); border-color: var(--red-dim); }
 
-    /* Pointer lock button */
-    .pointer-lock-btn {
-      width: 30px;
-      height: 30px;
-      background: var(--surface2);
-      border: 1px solid var(--border2);
-      border-radius: 4px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--text2);
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
-      flex-shrink: 0;
-      position: relative;
-    }
-    .pointer-lock-btn:hover { background: var(--surface3); color: var(--text); }
-    .pointer-lock-btn.active {
-      background: rgba(196,31,31,0.18);
-      color: var(--red-bright);
-      border-color: var(--red-dim);
-      box-shadow: 0 0 6px var(--red-glow);
-    }
-    .pointer-lock-btn svg { width: 13px; height: 13px; }
-
-    /* Pointer lock indicator bar */
-    #pointer-lock-indicator {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 2px;
-      background: var(--red-bright);
-      z-index: 999;
-      opacity: 0;
-      transition: opacity 0.3s;
-      box-shadow: 0 0 8px var(--red);
-    }
-    #pointer-lock-indicator.active { opacity: 1; }
-
     /* Version badge */
     .version-badge {
       position: fixed;
@@ -537,7 +520,7 @@
 </head>
 <body>
 
-<!-- Init overlay while SW registers -->
+<!-- Init overlay while proxy engine registers -->
 <div id="init-overlay">
   <div class="init-logo">ANDESINE</div>
   <div class="init-spinner"></div>
@@ -633,9 +616,6 @@
   </div>
 </div>
 
-<!-- Pointer lock top indicator bar -->
-<div id="pointer-lock-indicator"></div>
-
 <!-- Browser chrome (shown during proxy) -->
 <div id="browser-chrome">
   <button class="nav-btn" id="nav-back" disabled title="Back">
@@ -655,21 +635,24 @@
     </svg>
   </button>
   <input id="chrome-omni" type="text" spellcheck="false" autocomplete="off" placeholder="Enter URL…" />
-  <button class="pointer-lock-btn" id="pointer-lock-btn" title="Lock mouse to page (for games)">
-    <svg viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="3" y="6" width="8" height="7" rx="1.2" stroke="currentColor" stroke-width="1.4"/>
-      <path d="M5 6V4.5a2 2 0 0 1 4 0V6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-      <circle cx="7" cy="9.5" r="1" fill="currentColor"/>
-    </svg>
-  </button>
   <button class="chrome-home-btn" id="home-btn">⬡ Home</button>
 </div>
 
 <!-- Loading progress bar -->
 <div id="load-bar"></div>
 
-<!-- Proxy iframe -->
-<iframe id="proxy-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"></iframe>
+<!--
+  Proxy-engine iframe — always present so the service worker stays alive.
+  No sandbox: this is our own trusted page on the koyeb.app origin.
+  allow="pointer-lock *" propagates pointer-lock permission to nested iframes.
+-->
+<iframe
+  id="proxy-engine"
+  allow="pointer-lock *"
+></iframe>
+
+<!-- Pointer-lock indicator badge -->
+<div id="pointer-lock-badge">⊙ MOUSE LOCKED</div>
 
 <!-- Toast notifications -->
 <div id="toast"></div>
@@ -678,26 +661,26 @@
 <div class="version-badge">ANDESINE v2 · Scramjet</div>
 
 
-<!-- Scramjet v2 IIFE bundle — sets globalThis.$scramjet -->
-<script src="/scram/scramjet.js"></script>
-
-<!-- Scramjet Controller API — sets globalThis.$scramjetController.Controller/Frame -->
-<script src="/controller/controller.api.js"></script>
-
-<!-- Main app — module so top-level await and dynamic import() work -->
 <script type="module">
 (async () => {
+
+  // ──────────────────────────────────────────
+  //  SERVER ORIGIN
+  //  Injected by the dynamic GET / handler as window.ANDESINE_SERVER.
+  //  Falls back to location.origin when loaded directly from the server.
+  // ──────────────────────────────────────────
+  const SERVER_ORIGIN = window.ANDESINE_SERVER || location.origin;
 
   // ──────────────────────────────────────────
   //  QUICK LINKS DATA
   // ──────────────────────────────────────────
   const quickLinks = [
-    { name: 'Google',    url: 'https://www.google.com',    color: '#1a6cf5', label: 'G'  },
-    { name: 'YouTube',   url: 'https://www.youtube.com',   color: '#c41f1f', label: '▶'  },
-    { name: 'Reddit',    url: 'https://www.reddit.com',    color: '#b04010', label: 'r/' },
-    { name: 'GeForce Now', url: 'https://play.geforcenow.com/', color: '#76b900', label: 'GFN' },
-    { name: 'Discord',   url: 'https://discord.com/app',   color: '#5865f2', label: 'DC' },
-    { name: 'Spotify',   url: 'https://open.spotify.com',  color: '#1db954', label: '♫'  },
+    { name: 'Google',    url: 'https://www.google.com',         color: '#1a6cf5', label: 'G'  },
+    { name: 'YouTube',   url: 'https://www.youtube.com',        color: '#c41f1f', label: '▶'  },
+    { name: 'Reddit',    url: 'https://www.reddit.com',         color: '#b04010', label: 'r/' },
+    { name: 'GeForce',   url: 'https://play.geforcenow.com/',   color: '#76b900', label: '⚡'  },
+    { name: 'Discord',   url: 'https://discord.com/app',        color: '#5865f2', label: 'DC' },
+    { name: 'Spotify',   url: 'https://open.spotify.com',       color: '#1db954', label: '♫'  },
   ];
 
   const grid = document.getElementById('quick-grid');
@@ -714,26 +697,25 @@
   // ──────────────────────────────────────────
   //  DOM REFS
   // ──────────────────────────────────────────
-  const overlay      = document.getElementById('init-overlay');
-  const initMsg      = document.getElementById('init-msg');
-  const homeEl       = document.getElementById('home');
-  const chrome       = document.getElementById('browser-chrome');
-  const loadBar      = document.getElementById('load-bar');
-  const proxyFrame   = document.getElementById('proxy-frame');
-  const statusDot    = document.getElementById('status-dot');
-  const statusText   = document.getElementById('status-text');
-  const omniInput    = document.getElementById('omni-input');
-  const chromeOmni   = document.getElementById('chrome-omni');
-  const wispInput    = document.getElementById('wisp-url');
-  const transportSel = document.getElementById('transport-sel');
-  const navBack      = document.getElementById('nav-back');
-  const navFwd       = document.getElementById('nav-fwd');
-  const navReload    = document.getElementById('nav-reload');
-  const goBtn        = document.getElementById('go-btn');
-  const homeBtn      = document.getElementById('home-btn');
-  const toast        = document.getElementById('toast');
-  const pointerLockBtn       = document.getElementById('pointer-lock-btn');
-  const pointerLockIndicator = document.getElementById('pointer-lock-indicator');
+  const overlay          = document.getElementById('init-overlay');
+  const initMsg          = document.getElementById('init-msg');
+  const homeEl           = document.getElementById('home');
+  const chrome           = document.getElementById('browser-chrome');
+  const loadBar          = document.getElementById('load-bar');
+  const proxyEngine      = document.getElementById('proxy-engine');
+  const pointerLockBadge = document.getElementById('pointer-lock-badge');
+  const statusDot        = document.getElementById('status-dot');
+  const statusText       = document.getElementById('status-text');
+  const omniInput        = document.getElementById('omni-input');
+  const chromeOmni       = document.getElementById('chrome-omni');
+  const wispInput        = document.getElementById('wisp-url');
+  const transportSel     = document.getElementById('transport-sel');
+  const navBack          = document.getElementById('nav-back');
+  const navFwd           = document.getElementById('nav-fwd');
+  const navReload        = document.getElementById('nav-reload');
+  const goBtn            = document.getElementById('go-btn');
+  const homeBtn          = document.getElementById('home-btn');
+  const toast            = document.getElementById('toast');
 
   // ──────────────────────────────────────────
   //  HELPERS
@@ -778,18 +760,22 @@
   }
 
   // ──────────────────────────────────────────
-  //  SCRAMJET CONTROLLER INIT
+  //  ENGINE COMMUNICATION
+  //  All proxy work runs inside the /proxy-engine iframe (same koyeb.app origin).
+  //  This page is a pure UI shell that talks to it via postMessage.
   // ──────────────────────────────────────────
-  // $scramjet       is set by /scram/scramjet.js       (IIFE, loads globalThis.$scramjet)
-  // $scramjetController is set by /controller/controller.api.js (IIFE, Controller/Frame)
-  //
-  // The Controller manages its own transport directly — no BareMux needed.
+  let engineReady = false;
 
-  let controller    = null;   // Controller instance
-  let frame         = null;   // Frame instance (wraps the proxy iframe)
-  let transportReady = false;
+  function sendToEngine(msg) {
+    try {
+      // Target the engine's real origin so browsers enforce the boundary.
+      proxyEngine.contentWindow?.postMessage(msg, SERVER_ORIGIN);
+    } catch (err) {
+      console.warn('[Andesine] postMessage to engine failed:', err);
+    }
+  }
 
-  // Safety net: dismiss overlay after 8 s regardless of outcome.
+  // Safety net: dismiss the overlay after 12 s regardless of outcome.
   const overlayTimeout = setTimeout(() => {
     if (overlay.parentNode) {
       initMsg.textContent = 'READY (DEGRADED)';
@@ -797,141 +783,88 @@
       statusDot.className = 'status-dot error';
       statusText.textContent = 'INIT TIMEOUT';
     }
-  }, 8000);
+  }, 12000);
 
-  // Build a transport from the current UI selections.
-  // Returns a ProxyTransport that has already had .init() called.
-  async function buildTransport(wispUrl) {
-    const transportType = transportSel.value;
-    try {
-      if (transportType === 'epoxy') {
-        const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
-        const t = new EpoxyTransport({ wisp: wispUrl });
-        await t.init();
-        return t;
-      } else {
-        // libcurl ships default export AND named export — default is safest
-        const mod = await import('/libcurl/index.mjs');
-        const LibcurlClient = mod.default ?? mod.LibcurlClient;
-        const t = new LibcurlClient({ wisp: wispUrl });
-        await t.init();
-        return t;
-      }
-    } catch (err) {
-      // If the user's custom Wisp failed, retry with the public fallback
-      if (wispUrl !== 'wss://wisp.mercurywork.shop/') {
-        console.warn('[Andesine] Transport init failed, trying public Wisp:', err);
-        const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
-        const t = new EpoxyTransport({ wisp: 'wss://wisp.mercurywork.shop/' });
-        await t.init();
-        return t;
-      }
-      throw err;
+  // ── Message handler ────────────────────────────────────────────────────
+  window.addEventListener('message', (e) => {
+    // Only accept messages from our proxy-engine iframe.
+    if (e.source !== proxyEngine.contentWindow) return;
+    const data = e.data;
+    if (!data || typeof data !== 'object') return;
+
+    switch (data.type) {
+
+      // Engine is loaded and ready to receive INIT.
+      case 'ENGINE_LOADED':
+        sendToEngine({
+          type:          'INIT',
+          wispUrl:       wispInput.value.trim() || 'wss://wisp.mercurywork.shop/',
+          transportType: transportSel.value,
+        });
+        break;
+
+      // Status text updates during init.
+      case 'STATUS':
+        initMsg.textContent = data.msg;
+        break;
+
+      // Proxy is fully initialised.
+      case 'READY':
+        engineReady = true;
+        statusDot.className  = 'status-dot ready';
+        statusText.textContent = 'READY';
+        initMsg.textContent  = 'ENGINE READY';
+        clearTimeout(overlayTimeout);
+        setTimeout(() => dismissOverlay(), 400);
+        break;
+
+      // Init failed.
+      case 'ERROR':
+        console.error('[Andesine] Engine error:', data.message);
+        statusDot.className    = 'status-dot error';
+        statusText.textContent = 'ERROR';
+        initMsg.textContent    = 'INIT FAILED: ' + data.message;
+        clearTimeout(overlayTimeout);
+        dismissOverlay();
+        showToast('Proxy init failed: ' + data.message, true);
+        break;
+
+      // A page finished loading inside the proxy.
+      case 'LOAD_COMPLETE':
+        finishLoadBar();
+        break;
+
+      // The proxied page navigated — update the address bar.
+      case 'URL_CHANGE':
+        if (data.url) chromeOmni.value = data.url;
+        break;
+
+      // Pointer lock acquired / released inside the proxy.
+      case 'POINTER_LOCK':
+        pointerLockBadge.classList.toggle('active', !!data.locked);
+        break;
+
+      // Transport fell back to the public Wisp server.
+      case 'TRANSPORT_FALLBACK':
+        wispInput.value = data.wispUrl;
+        showToast('Wisp fallback: ' + data.wispUrl);
+        break;
+
+      // Hot-swap succeeded.
+      case 'TRANSPORT_OK':
+        statusDot.className    = 'status-dot ready';
+        statusText.textContent = 'READY';
+        showToast(`Transport: ${transportSel.value.toUpperCase()} · Wisp: ${wispInput.value.trim()}`);
+        break;
+
+      // Hot-swap failed.
+      case 'TRANSPORT_ERR':
+        statusDot.className    = 'status-dot error';
+        statusText.textContent = 'TRANSPORT ERR';
+        showToast('Transport failed: ' + data.message, true);
+        break;
     }
-  }
-
-  async function initProxy() {
-    initMsg.textContent = 'REGISTERING SERVICE WORKER';
-
-    try {
-      if (!('serviceWorker' in navigator)) {
-        throw new Error('Service Workers not supported in this browser');
-      }
-
-      // ── Service worker ───────────────────────────────────────────────────
-      // sw.js is a classic script (importScripts controller.sw.js).
-      // Do NOT pass { type: 'module' } — classic SWs need importScripts().
-      //
-      // Use absolute URLs for both script and scope. When a page is served
-      // inside an embedded context (e.g. platform preview iframes), inline
-      // module scripts are represented internally as blob: URLs. In that
-      // scenario, passing scope: '/' cannot be correctly resolved to the
-      // page origin and triggers a "Scope URL is not same-origin with Client"
-      // SecurityError. location.origin always resolves to the correct HTTPS
-      // origin (even from blob: contexts), so we use it explicitly.
-      const swScript = `${location.origin}/sw.js`;
-      const swScope  = `${location.origin}/`;
-      await navigator.serviceWorker.register(swScript, { scope: swScope });
-      const readyReg = await navigator.serviceWorker.ready;
-      const sw = readyReg.active;
-
-      if (!sw) {
-        throw new Error('Service worker did not become active');
-      }
-
-      initMsg.textContent = 'CONFIGURING TRANSPORT';
-
-      // ── Transport ────────────────────────────────────────────────────────
-      const wispUrl = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
-      const transport = await buildTransport(wispUrl);
-
-      // ── Controller ───────────────────────────────────────────────────────
-      // Paths must match what server.js actually serves:
-      //   /scram/ → scramjet dist   (scramjet.js, scramjet.wasm)
-      //   /controller/ → scramjet-controller dist (controller.inject.js)
-      const { Controller } = $scramjetController;
-      controller = new Controller({
-        serviceworker: sw,
-        transport,
-        config: {
-          scramjetPath:    '/scram/scramjet.js',
-          wasmPath:        '/scram/scramjet.wasm',
-          injectPath:      '/controller/controller.inject.js',
-          virtualWasmPath: 'scramjet.wasm.js',
-        },
-      });
-
-      // wait() resolves once the SW has acknowledged the controller
-      // and the WASM has been fetched.
-      await controller.wait();
-
-      // ── Frame ────────────────────────────────────────────────────────────
-      // createFrame() wraps the existing <iframe> element.
-      frame = controller.createFrame(proxyFrame);
-
-      // ── Ready ────────────────────────────────────────────────────────────
-      transportReady = true;
-      statusDot.className = 'status-dot ready';
-      statusText.textContent = 'READY';
-      initMsg.textContent = 'ENGINE READY';
-
-      clearTimeout(overlayTimeout);
-      setTimeout(() => dismissOverlay(), 400);
-
-    } catch (err) {
-      console.error('[Andesine] Init error:', err);
-
-      statusDot.className = 'status-dot error';
-      statusText.textContent = 'ERROR';
-      initMsg.textContent = 'INIT FAILED: ' + err.message;
-
-      clearTimeout(overlayTimeout);
-      dismissOverlay();
-      showToast('Proxy init failed: ' + err.message, true);
-    }
-  }
-
-  // Hot-swap the transport (called when the user changes the transport/wisp).
-  async function setTransport() {
-    if (!controller) return;
-    const wispUrl = wispInput.value.trim() || 'wss://wisp.mercurywork.shop/';
-    statusDot.className = 'status-dot loading';
-    statusText.textContent = 'CONFIGURING';
-
-    try {
-      const transport = await buildTransport(wispUrl);
-      controller.setTransport(transport);
-      statusDot.className = 'status-dot ready';
-      statusText.textContent = 'READY';
-      showToast(`Transport: ${transportSel.value.toUpperCase()} · Wisp: ${wispUrl}`);
-    } catch (err) {
-      console.error('[Andesine] Transport swap failed:', err);
-      statusDot.className = 'status-dot error';
-      statusText.textContent = 'TRANSPORT ERR';
-      showToast('Transport failed: ' + err.message, true);
-      transportReady = false;
-    }
-  }
+  });
 
   // ──────────────────────────────────────────
   //  NAVIGATION
@@ -942,7 +875,7 @@
     const url = normalizeUrl(rawUrl);
     if (!url) { showToast('Enter a URL or search term', true); return; }
 
-    if (!transportReady || !frame) {
+    if (!engineReady) {
       showToast('Proxy not ready yet — please wait', true);
       return;
     }
@@ -953,55 +886,38 @@
     if (!isBrowsing) {
       homeEl.classList.add('hidden');
       chrome.classList.add('visible');
-      proxyFrame.classList.add('visible');
+      proxyEngine.classList.add('visible');
       isBrowsing = true;
     }
 
-    try {
-      // frame.go() rewrites the URL through the scramjet codec and sets
-      // frame.element.src — no need to touch proxyFrame.src directly.
-      frame.go(url);
-    } catch (err) {
-      console.error('[Andesine] Navigation error:', err);
-      showToast('Navigation failed: ' + err.message, true);
-      finishLoadBar();
-    }
+    sendToEngine({ type: 'NAVIGATE', url });
   }
 
   function goHome() {
-    // Release pointer lock if active before returning home
-    if (document.pointerLockElement) document.exitPointerLock();
     isBrowsing = false;
     chrome.classList.remove('visible');
     homeEl.classList.remove('hidden');
-    proxyFrame.classList.remove('visible');
-    proxyFrame.src = 'about:blank';
+    proxyEngine.classList.remove('visible');
+    // Navigate the proxy frame to blank so it stops any media / network use.
+    sendToEngine({ type: 'NAVIGATE', url: 'about:blank' });
     chromeOmni.value = '';
+    pointerLockBadge.classList.remove('active');
     finishLoadBar();
   }
 
   // ──────────────────────────────────────────
-  //  IFRAME EVENTS
+  //  TRANSPORT HOT-SWAP
   // ──────────────────────────────────────────
-  proxyFrame.addEventListener('load', () => {
-    finishLoadBar();
-    try {
-      const loc = proxyFrame.contentWindow?.location?.href;
-      if (loc && loc !== 'about:blank' && frame) {
-        // The controller prefix looks like /~/sj/{ctrlId}/{frameId}/
-        // Everything after it is encodeURIComponent(originalUrl)
-        const prefix = frame.prefix;
-        let displayUrl = loc;
-        try {
-          const path = new URL(loc, location.href).pathname;
-          if (path.startsWith(prefix)) {
-            displayUrl = decodeURIComponent(path.slice(prefix.length));
-          }
-        } catch { /* leave displayUrl as loc */ }
-        chromeOmni.value = displayUrl;
-      }
-    } catch { /* cross-origin — ignore */ }
-  });
+  function setTransport() {
+    if (!engineReady) return;
+    statusDot.className    = 'status-dot loading';
+    statusText.textContent = 'CONFIGURING';
+    sendToEngine({
+      type:          'SET_TRANSPORT',
+      wispUrl:       wispInput.value.trim() || 'wss://wisp.mercurywork.shop/',
+      transportType: transportSel.value,
+    });
+  }
 
   // ──────────────────────────────────────────
   //  EVENT LISTENERS
@@ -1018,62 +934,21 @@
     if (e.key === 'Enter') navigate(chromeOmni.value);
   });
 
-  // Nav buttons — delegate to the Frame so scramjet can hook history/location
-  navBack.addEventListener('click', () => {
-    if (frame) frame.back(); else try { history.back(); } catch {}
-  });
-  navFwd.addEventListener('click', () => {
-    if (frame) frame.forward(); else try { history.forward(); } catch {}
-  });
-  navReload.addEventListener('click', () => {
-    startLoadBar();
-    if (frame) frame.reload(); else proxyFrame.src = proxyFrame.src;
-  });
+  // Nav buttons
+  navBack.addEventListener('click',   () => sendToEngine({ type: 'BACK' }));
+  navFwd.addEventListener('click',    () => sendToEngine({ type: 'FORWARD' }));
+  navReload.addEventListener('click', () => { startLoadBar(); sendToEngine({ type: 'RELOAD' }); });
 
   // Home button
   homeBtn.addEventListener('click', goHome);
 
-  // Transport / Wisp changes — hot-swap via controller.setTransport()
+  // Transport / Wisp changes
   transportSel.addEventListener('change', setTransport);
-  wispInput.addEventListener('change', setTransport);
-
-  // ── Pointer Lock ──────────────────────────────────────────────────────
-  // The proxy iframe has allow-pointer-lock in its sandbox, so websites
-  // loaded inside it can call requestPointerLock() themselves (e.g. games).
-  // The button in the chrome lets users manually lock/unlock the mouse.
-  pointerLockBtn.addEventListener('click', () => {
-    if (document.pointerLockElement) {
-      document.exitPointerLock();
-    } else {
-      // Request pointer lock on the iframe element itself; mouse events
-      // while locked are delivered to the iframe so the proxied page sees them.
-      proxyFrame.requestPointerLock();
-    }
-  });
-
-  document.addEventListener('pointerlockchange', () => {
-    const locked = document.pointerLockElement === proxyFrame;
-    pointerLockBtn.classList.toggle('active', locked);
-    pointerLockIndicator.classList.toggle('active', locked);
-    if (locked) {
-      showToast('Mouse locked — press Escape to release');
-    }
-  });
-
-  document.addEventListener('pointerlockerror', () => {
-    showToast('Mouse lock unavailable for this page', true);
-  });
+  wispInput.addEventListener('change',    setTransport);
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
-    // Escape: if pointer-locked, release lock first; if browsing (not locked), go home
-    if (e.key === 'Escape') {
-      if (document.pointerLockElement) {
-        document.exitPointerLock();
-      } else if (isBrowsing) {
-        goHome();
-      }
-    }
+    if (e.key === 'Escape' && isBrowsing) goHome();
     if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
       e.preventDefault();
       if (isBrowsing) chromeOmni.select();
@@ -1083,8 +958,10 @@
 
   // ──────────────────────────────────────────
   //  BOOT
+  //  Point the proxy-engine iframe at the real origin.
+  //  Its load event will trigger ENGINE_LOADED → INIT → READY.
   // ──────────────────────────────────────────
-  initProxy();
+  proxyEngine.src = SERVER_ORIGIN + '/proxy-engine';
 
 })();
 </script>
