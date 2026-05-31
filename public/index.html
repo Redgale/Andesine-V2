@@ -482,6 +482,46 @@
     #toast.show { transform: translateX(-50%) translateY(0); }
     #toast.error { color: var(--red-bright); border-color: var(--red-dim); }
 
+    /* Pointer lock button */
+    .pointer-lock-btn {
+      width: 30px;
+      height: 30px;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text2);
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .pointer-lock-btn:hover { background: var(--surface3); color: var(--text); }
+    .pointer-lock-btn.active {
+      background: rgba(196,31,31,0.18);
+      color: var(--red-bright);
+      border-color: var(--red-dim);
+      box-shadow: 0 0 6px var(--red-glow);
+    }
+    .pointer-lock-btn svg { width: 13px; height: 13px; }
+
+    /* Pointer lock indicator bar */
+    #pointer-lock-indicator {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--red-bright);
+      z-index: 999;
+      opacity: 0;
+      transition: opacity 0.3s;
+      box-shadow: 0 0 8px var(--red);
+    }
+    #pointer-lock-indicator.active { opacity: 1; }
+
     /* Version badge */
     .version-badge {
       position: fixed;
@@ -588,10 +628,13 @@
     </select>
     <span class="settings-label">WISP</span>
     <input class="wisp-input" id="wisp-url" type="text"
-      value="wss://andesine2.koyeb.app/wisp/" spellcheck="false" />
+      value="wss://wisp.mercurywork.shop/" spellcheck="false" />
     <span class="settings-label" id="status-text" style="margin-left:auto">Loading…</span>
   </div>
 </div>
+
+<!-- Pointer lock top indicator bar -->
+<div id="pointer-lock-indicator"></div>
 
 <!-- Browser chrome (shown during proxy) -->
 <div id="browser-chrome">
@@ -612,6 +655,13 @@
     </svg>
   </button>
   <input id="chrome-omni" type="text" spellcheck="false" autocomplete="off" placeholder="Enter URL…" />
+  <button class="pointer-lock-btn" id="pointer-lock-btn" title="Lock mouse to page (for games)">
+    <svg viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="6" width="8" height="7" rx="1.2" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M5 6V4.5a2 2 0 0 1 4 0V6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      <circle cx="7" cy="9.5" r="1" fill="currentColor"/>
+    </svg>
+  </button>
   <button class="chrome-home-btn" id="home-btn">⬡ Home</button>
 </div>
 
@@ -619,7 +669,7 @@
 <div id="load-bar"></div>
 
 <!-- Proxy iframe -->
-<iframe id="proxy-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"></iframe>
+<iframe id="proxy-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"></iframe>
 
 <!-- Toast notifications -->
 <div id="toast"></div>
@@ -645,7 +695,7 @@
     { name: 'Google',    url: 'https://www.google.com',    color: '#1a6cf5', label: 'G'  },
     { name: 'YouTube',   url: 'https://www.youtube.com',   color: '#c41f1f', label: '▶'  },
     { name: 'Reddit',    url: 'https://www.reddit.com',    color: '#b04010', label: 'r/' },
-    { name: 'Twitter',   url: 'https://twitter.com',       color: '#1a8cd8', label: '𝕏'  },
+    { name: 'GeForce Now', url: 'https://play.geforcenow.com/', color: '#76b900', label: 'GFN' },
     { name: 'Discord',   url: 'https://discord.com/app',   color: '#5865f2', label: 'DC' },
     { name: 'Spotify',   url: 'https://open.spotify.com',  color: '#1db954', label: '♫'  },
   ];
@@ -682,6 +732,8 @@
   const goBtn        = document.getElementById('go-btn');
   const homeBtn      = document.getElementById('home-btn');
   const toast        = document.getElementById('toast');
+  const pointerLockBtn       = document.getElementById('pointer-lock-btn');
+  const pointerLockIndicator = document.getElementById('pointer-lock-indicator');
 
   // ──────────────────────────────────────────
   //  HELPERS
@@ -703,7 +755,7 @@
     const s = raw.trim();
     if (!s) return null;
     if (!/^https?:\/\//i.test(s) && !/\./i.test(s)) {
-      return 'https://duckduckgo.com/?q=' + encodeURIComponent(s);
+      return 'https://www.google.com/search?q=' + encodeURIComponent(s);
     }
     if (!/^https?:\/\//i.test(s)) return 'https://' + s;
     return s;
@@ -787,9 +839,19 @@
       }
 
       // ── Service worker ───────────────────────────────────────────────────
-      // sw.js is now a classic script (importScripts controller.sw.js).
-      // Do NOT pass { type: 'module' } — classic SWs can use importScripts().
-      await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      // sw.js is a classic script (importScripts controller.sw.js).
+      // Do NOT pass { type: 'module' } — classic SWs need importScripts().
+      //
+      // Use absolute URLs for both script and scope. When a page is served
+      // inside an embedded context (e.g. platform preview iframes), inline
+      // module scripts are represented internally as blob: URLs. In that
+      // scenario, passing scope: '/' cannot be correctly resolved to the
+      // page origin and triggers a "Scope URL is not same-origin with Client"
+      // SecurityError. location.origin always resolves to the correct HTTPS
+      // origin (even from blob: contexts), so we use it explicitly.
+      const swScript = `${location.origin}/sw.js`;
+      const swScope  = `${location.origin}/`;
+      await navigator.serviceWorker.register(swScript, { scope: swScope });
       const readyReg = await navigator.serviceWorker.ready;
       const sw = readyReg.active;
 
@@ -907,6 +969,8 @@
   }
 
   function goHome() {
+    // Release pointer lock if active before returning home
+    if (document.pointerLockElement) document.exitPointerLock();
     isBrowsing = false;
     chrome.classList.remove('visible');
     homeEl.classList.remove('hidden');
@@ -973,9 +1037,43 @@
   transportSel.addEventListener('change', setTransport);
   wispInput.addEventListener('change', setTransport);
 
+  // ── Pointer Lock ──────────────────────────────────────────────────────
+  // The proxy iframe has allow-pointer-lock in its sandbox, so websites
+  // loaded inside it can call requestPointerLock() themselves (e.g. games).
+  // The button in the chrome lets users manually lock/unlock the mouse.
+  pointerLockBtn.addEventListener('click', () => {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    } else {
+      // Request pointer lock on the iframe element itself; mouse events
+      // while locked are delivered to the iframe so the proxied page sees them.
+      proxyFrame.requestPointerLock();
+    }
+  });
+
+  document.addEventListener('pointerlockchange', () => {
+    const locked = document.pointerLockElement === proxyFrame;
+    pointerLockBtn.classList.toggle('active', locked);
+    pointerLockIndicator.classList.toggle('active', locked);
+    if (locked) {
+      showToast('Mouse locked — press Escape to release');
+    }
+  });
+
+  document.addEventListener('pointerlockerror', () => {
+    showToast('Mouse lock unavailable for this page', true);
+  });
+
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && isBrowsing) goHome();
+    // Escape: if pointer-locked, release lock first; if browsing (not locked), go home
+    if (e.key === 'Escape') {
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+      } else if (isBrowsing) {
+        goHome();
+      }
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
       e.preventDefault();
       if (isBrowsing) chromeOmni.select();

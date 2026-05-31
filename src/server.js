@@ -95,12 +95,18 @@ const app  = Fastify({ logger: false });
 // ── MIME type enforcement ─────────────────────────────────────────────────
 // .mjs must be served as text/javascript for dynamic import() to work.
 // .wasm must be served as application/wasm for WebAssembly.instantiateStreaming().
+// /sw.js must include Service-Worker-Allowed: / so the SW can claim the root
+// scope even when the registration originates from an embedded context (blob:
+// pages, platform preview iframes, etc.) where a relative scope '/' cannot
+// be safely resolved.
 app.addHook("onSend", async (request, reply, payload) => {
   const url = request.url.split("?")[0];
   if (url.endsWith(".mjs")) {
     reply.header("Content-Type", "text/javascript; charset=utf-8");
   } else if (url.endsWith(".wasm")) {
     reply.header("Content-Type", "application/wasm");
+  } else if (url === "/sw.js") {
+    reply.header("Service-Worker-Allowed", "/");
   }
   return payload;
 });
