@@ -1,54 +1,38 @@
-# ── Andesine — Dockerfile ──────────────────────────────────────────────────
-# Optimized for Koyeb deployment (also works locally with docker run)
-#
-# Build:  docker build -t andesine .
-# Run:    docker run -p 3000:3000 andesine
-# Koyeb:  push to GitHub → connect repo in Koyeb → it auto-detects this file
-# ───────────────────────────────────────────────────────────────────────────
-
-# ── Stage 1: install dependencies ─────────────────────────────────────────
-FROM node:20-alpine AS deps
+# ── Build stage ──────────────────────────────────────────────────────────────
+FROM node:20-slim AS deps
 
 WORKDIR /app
 
-# Copy manifests first — lets Docker cache the npm layer separately
-# so a code-only change doesn't re-run npm install
-COPY package.json package-lock.json* ./
+# Copy only the manifest first so Docker can cache the npm install layer
+COPY package.json ./
+RUN npm install --omit=dev --ignore-scripts
 
-# Install ONLY production deps (no devDependencies)
-RUN npm ci --omit=dev
+# ── Runtime stage ─────────────────────────────────────────────────────────────
+FROM node:20-slim AS runtime
 
-
-# ── Stage 2: lean runtime image ───────────────────────────────────────────
-FROM node:20-alpine AS runtime
-
-# Create a non-root user for security
-RUN addgroup -S andesine && adduser -S andesine -G andesine
+# Security: drop privileges
+RUN groupadd --system andesine && useradd --system --gid andesine andesine
 
 WORKDIR /app
 
-# Pull in production node_modules from the deps stage
+# Copy installed node_modules from the build stage
 COPY --from=deps /app/node_modules ./node_modules
 
-# Copy the application source
-COPY src/    ./src/
-COPY public/ ./public/
-COPY package.json ./
+# Copy application source
+COPY package.json     ./
+COPY server.mjs       ./
+COPY src/             ./src/
+COPY dist/            ./dist/
+COPY public/          ./public/
 
-# Switch to non-root user
+# Koyeb injects PORT at runtime; we fall back to 3000 for local dev
+ENV PORT=3000
+ENV NODE_ENV=production
+
+# Drop to non-root user
 USER andesine
 
-# Koyeb injects $PORT at runtime (typically 8080 on Koyeb, 3000 locally).
-# The server already reads process.env.PORT so no code changes needed.
-ENV PORT=3000
 EXPOSE 3000
 
-# Health check — Koyeb also does TCP checks, but this gives a cleaner signal
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD node -e "\
-    const h = require('http'); \
-    h.get('http://localhost:' + (process.env.PORT||3000) + '/', r => \
-      process.exit(r.statusCode < 400 ? 0 : 1) \
-    ).on('error', () => process.exit(1))"
-
-CMD ["node", "src/server.js"]
+# Use exec form so signals reach the process (no shell wrapper)
+CMD ["node", "server.mjs"]

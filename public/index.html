@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Andesine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Syne:wght@400;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Tokens ─────────────────────────────────────────────────────────── */
+    :root {
+      --bg:        #080604;
+      --bg-2:      #0f0b08;
+      --surface:   rgba(255,255,255,0.035);
+      --border:    rgba(196,124,58,0.18);
+      --border-hi: rgba(196,124,58,0.55);
+      --copper:    #c47c3a;
+      --copper-lo: #8b5a28;
+      --copper-hi: #e09a50;
+      --amber:     #f0c060;
+      --text:      #d4c4a8;
+      --text-dim:  #7a6a52;
+      --text-hi:   #f0e8d4;
+      --irid-1:    #9b6bc4;
+      --irid-2:    #4a8fc4;
+      --irid-3:    #c44a6b;
+      --radius:    10px;
+    }
+
+    /* ── Reset ──────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Background: crystalline facets ─────────────────────────────────── */
+    .bg-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      overflow: hidden;
+    }
+
+    .bg-canvas svg {
+      width: 100%;
+      height: 100%;
+      opacity: 0.22;
+    }
+
+    /* Radial glow behind the card */
+    .glow-center {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 700px;
+      height: 500px;
+      background: radial-gradient(ellipse at center,
+        rgba(196,124,58,0.12) 0%,
+        rgba(139,90,40,0.06) 40%,
+        transparent 70%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* Iridescent shimmer lines */
+    .shimmer-line {
+      position: fixed;
+      left: 0; right: 0;
+      height: 1px;
+      z-index: 0;
+      opacity: 0;
+      animation: shimmer-pass 8s ease-in-out infinite;
+    }
+    .shimmer-line:nth-child(1) { top: 28%; background: linear-gradient(90deg, transparent 0%, var(--irid-1) 40%, var(--irid-2) 60%, transparent 100%); animation-delay: 0s; }
+    .shimmer-line:nth-child(2) { top: 52%; background: linear-gradient(90deg, transparent 10%, var(--irid-3) 50%, var(--irid-1) 70%, transparent 100%); animation-delay: 3.2s; }
+    .shimmer-line:nth-child(3) { top: 71%; background: linear-gradient(90deg, transparent 20%, var(--irid-2) 55%, var(--irid-3) 75%, transparent 100%); animation-delay: 6.1s; }
+
+    @keyframes shimmer-pass {
+      0%   { opacity: 0; transform: scaleX(0.2) translateX(-30%); }
+      20%  { opacity: 0.6; }
+      50%  { opacity: 0.35; }
+      80%  { opacity: 0.6; }
+      100% { opacity: 0; transform: scaleX(1.2) translateX(10%); }
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    .page {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1.5rem;
+      gap: 0;
+    }
+
+    /* ── Crystal card ────────────────────────────────────────────────────── */
+    .card {
+      width: 100%;
+      max-width: 660px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 3rem 3rem 2.5rem;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow:
+        0 0 0 1px rgba(196,124,58,0.07) inset,
+        0 2px 60px rgba(0,0,0,0.6),
+        0 0 120px rgba(196,124,58,0.04);
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) both;
+    }
+
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(24px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* ── Logo mark ───────────────────────────────────────────────────────── */
+    .logo-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 2.8rem;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.05s both;
+    }
+
+    .crystal-icon {
+      width: 42px;
+      height: 42px;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 12px rgba(196,124,58,0.5));
+    }
+
+    .logo-text {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .logo-name {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 1.65rem;
+      letter-spacing: 0.04em;
+      color: var(--text-hi);
+      line-height: 1;
+    }
+
+    .logo-sub {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 0.78rem;
+      font-weight: 300;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--copper);
+      line-height: 1;
+    }
+
+    /* ── Divider line ────────────────────────────────────────────────────── */
+    .divider {
+      width: 100%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, var(--border-hi) 40%, var(--border) 70%, transparent 100%);
+      margin-bottom: 2.4rem;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.1s both;
+    }
+
+    /* ── URL form ────────────────────────────────────────────────────────── */
+    .form-label {
+      display: block;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--copper);
+      margin-bottom: 0.75rem;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.12s both;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.15s both;
+    }
+
+    .url-input {
+      flex: 1;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.85rem 1.1rem;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.92rem;
+      font-weight: 400;
+      color: var(--text-hi);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+      min-width: 0;
+    }
+
+    .url-input::placeholder {
+      color: var(--text-dim);
+      font-weight: 400;
+    }
+
+    .url-input:focus {
+      border-color: var(--border-hi);
+      background: rgba(255,255,255,0.06);
+      box-shadow: 0 0 0 3px rgba(196,124,58,0.12), 0 0 24px rgba(196,124,58,0.08);
+    }
+
+    .go-btn {
+      background: linear-gradient(135deg, var(--copper-lo) 0%, var(--copper) 100%);
+      border: 1px solid rgba(196,124,58,0.4);
+      border-radius: var(--radius);
+      color: #fff;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.85rem 1.5rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .go-btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 50%);
+      border-radius: inherit;
+    }
+
+    .go-btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.1);
+      box-shadow: 0 4px 20px rgba(196,124,58,0.35);
+    }
+
+    .go-btn:active {
+      transform: translateY(0);
+      filter: brightness(0.95);
+    }
+
+    .go-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Loading spinner inside button */
+    .btn-spinner {
+      display: none;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error / status ──────────────────────────────────────────────────── */
+    .status-bar {
+      margin-top: 1rem;
+      padding: 0.6rem 0.9rem;
+      border-radius: 8px;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.8rem;
+      display: none;
+    }
+
+    .status-bar.error {
+      background: rgba(196,58,58,0.12);
+      border: 1px solid rgba(196,58,58,0.3);
+      color: #e09090;
+      display: block;
+    }
+
+    /* ── Suggestions ─────────────────────────────────────────────────────── */
+    .suggestions {
+      margin-top: 2rem;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.2s both;
+    }
+
+    .suggestions-label {
+      font-family: 'Syne', sans-serif;
+      font-size: 0.63rem;
+      font-weight: 700;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 0.75rem;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.38rem 0.9rem;
+      font-family: 'Syne', sans-serif;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s, background 0.2s;
+      user-select: none;
+    }
+
+    .chip:hover {
+      border-color: var(--border-hi);
+      color: var(--copper-hi);
+      background: rgba(196,124,58,0.07);
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────────────── */
+    .footer {
+      margin-top: 2.4rem;
+      text-align: center;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.25s both;
+    }
+
+    .footer p {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 0.78rem;
+      font-weight: 300;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+    }
+
+    .footer a {
+      color: var(--copper);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+
+    .footer a:hover { color: var(--copper-hi); }
+
+    /* ── Mineral info strip ───────────────────────────────────────────────── */
+    .mineral-strip {
+      display: flex;
+      justify-content: center;
+      gap: 2.5rem;
+      margin-bottom: 2.5rem;
+      animation: card-in 0.9s cubic-bezier(0.22,1,0.36,1) 0.08s both;
+    }
+
+    .mineral-stat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .mineral-stat-val {
+      font-family: 'Syne', sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--copper-hi);
+    }
+
+    .mineral-stat-key {
+      font-size: 0.62rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    /* ── Responsive ──────────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .card { padding: 2rem 1.5rem 1.8rem; }
+      .mineral-strip { gap: 1.2rem; }
+      .input-row { flex-direction: column; }
+      .go-btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Crystalline background ─────────────────────────────────────────── -->
+<div class="bg-canvas" aria-hidden="true">
+  <svg viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="facet-a" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%"   stop-color="#c47c3a" stop-opacity="0.35"/>
+        <stop offset="100%" stop-color="#8b5a28" stop-opacity="0.05"/>
+      </linearGradient>
+      <linearGradient id="facet-b" x1="100%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%"   stop-color="#9b6bc4" stop-opacity="0.2"/>
+        <stop offset="100%" stop-color="#c47c3a" stop-opacity="0.08"/>
+      </linearGradient>
+      <linearGradient id="facet-c" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%"   stop-color="#4a8fc4" stop-opacity="0.15"/>
+        <stop offset="100%" stop-color="#c44a6b" stop-opacity="0.08"/>
+      </linearGradient>
+    </defs>
+    <!-- Left crystal cluster -->
+    <polygon points="0,900 180,600 320,820 140,900"   fill="url(#facet-a)"/>
+    <polygon points="180,600 420,400 320,820"          fill="url(#facet-b)"/>
+    <polygon points="420,400 560,650 320,820"          fill="url(#facet-c)"/>
+    <polygon points="0,500 200,200 280,550 80,650"     fill="url(#facet-b)"/>
+    <polygon points="200,200 380,0  420,400 280,550"   fill="url(#facet-a)"/>
+    <!-- Right crystal cluster -->
+    <polygon points="1440,900 1260,600 1120,820 1300,900" fill="url(#facet-a)"/>
+    <polygon points="1260,600 1020,400 1120,820"          fill="url(#facet-b)"/>
+    <polygon points="1020,400 880,650 1120,820"           fill="url(#facet-c)"/>
+    <polygon points="1440,500 1240,200 1160,550 1360,650" fill="url(#facet-b)"/>
+    <polygon points="1240,200 1060,0  1020,400 1160,550"  fill="url(#facet-a)"/>
+    <!-- Top centre shard -->
+    <polygon points="640,0 720,180 800,0"               fill="url(#facet-c)"/>
+    <polygon points="660,0 580,220 720,180"              fill="url(#facet-b)"/>
+    <polygon points="780,0 860,220 720,180"              fill="url(#facet-a)"/>
+  </svg>
+</div>
+
+<div class="glow-center" aria-hidden="true"></div>
+<div class="shimmer-line" aria-hidden="true"></div>
+<div class="shimmer-line" aria-hidden="true"></div>
+<div class="shimmer-line" aria-hidden="true"></div>
+
+<!-- ── Main content ───────────────────────────────────────────────────── -->
+<main class="page">
+  <div class="card">
+
+    <!-- Logo -->
+    <div class="logo-wrap">
+      <svg class="crystal-icon" viewBox="0 0 42 42" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <polygon points="21,2 36,11 36,31 21,40 6,31 6,11" fill="none" stroke="#c47c3a" stroke-width="1.2"/>
+        <polygon points="21,2 36,11 21,17" fill="rgba(196,124,58,0.25)"/>
+        <polygon points="21,2 6,11 21,17" fill="rgba(155,107,196,0.2)"/>
+        <polygon points="36,11 36,31 21,17" fill="rgba(196,124,58,0.15)"/>
+        <polygon points="6,11 6,31 21,17" fill="rgba(74,143,196,0.15)"/>
+        <polygon points="36,31 21,40 21,17" fill="rgba(196,74,107,0.15)"/>
+        <polygon points="6,31 21,40 21,17" fill="rgba(196,124,58,0.2)"/>
+        <circle cx="21" cy="17" r="2" fill="#c47c3a" opacity="0.8"/>
+      </svg>
+      <div class="logo-text">
+        <span class="logo-name">Andesine</span>
+        <span class="logo-sub">Web Proxy</span>
+      </div>
+    </div>
+
+    <!-- Mineral stats (decorative) -->
+    <div class="mineral-strip" aria-label="Proxy features">
+      <div class="mineral-stat">
+        <span class="mineral-stat-val">No SW</span>
+        <span class="mineral-stat-key">Service Worker</span>
+      </div>
+      <div class="mineral-stat">
+        <span class="mineral-stat-val">Wisp</span>
+        <span class="mineral-stat-key">Transport</span>
+      </div>
+      <div class="mineral-stat">
+        <span class="mineral-stat-val">Scramjet</span>
+        <span class="mineral-stat-key">Rewriter</span>
+      </div>
+    </div>
+
+    <div class="divider" aria-hidden="true"></div>
+
+    <!-- URL form -->
+    <label class="form-label" for="url-input">Destination URL</label>
+    <div class="input-row">
+      <input
+        id="url-input"
+        class="url-input"
+        type="text"
+        placeholder="example.com or https://…"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
+        aria-label="URL to proxy"
+      />
+      <button class="go-btn" id="go-btn" type="button" aria-label="Navigate through proxy">
+        <span class="btn-spinner" id="btn-spinner" aria-hidden="true"></span>
+        Navigate
+      </button>
+    </div>
+    <div class="status-bar" id="status-bar" role="alert" aria-live="polite"></div>
+
+    <!-- Quick-launch suggestions -->
+    <div class="suggestions" aria-label="Quick links">
+      <p class="suggestions-label">Quick launch</p>
+      <div class="chips" role="list">
+        <span class="chip" role="listitem" tabindex="0" data-url="https://google.com">Google</span>
+        <span class="chip" role="listitem" tabindex="0" data-url="https://wikipedia.org">Wikipedia</span>
+        <span class="chip" role="listitem" tabindex="0" data-url="https://reddit.com">Reddit</span>
+        <span class="chip" role="listitem" tabindex="0" data-url="https://github.com">GitHub</span>
+        <span class="chip" role="listitem" tabindex="0" data-url="https://news.ycombinator.com">Hacker News</span>
+        <span class="chip" role="listitem" tabindex="0" data-url="https://duckduckgo.com">DuckDuckGo</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer" aria-label="Site footer">
+    <p>
+      Powered by <a href="https://github.com/MercuryWorkshop/scramjet" target="_blank" rel="noopener noreferrer">Scramjet</a>
+      &nbsp;·&nbsp;
+      Andesine &mdash; a copper feldspar mineral
+    </p>
+  </footer>
+</main>
+
+<script>
+  (function () {
+    'use strict';
+
+    var input   = document.getElementById('url-input');
+    var btn     = document.getElementById('go-btn');
+    var spinner = document.getElementById('btn-spinner');
+    var status  = document.getElementById('status-bar');
+
+    // ── Navigate ───────────────────────────────────────────────────────
+    function navigate(rawUrl) {
+      rawUrl = rawUrl.trim();
+      if (!rawUrl) {
+        showError('Please enter a URL.');
+        input.focus();
+        return;
+      }
+
+      // Auto-prepend https:// if no scheme
+      var url = rawUrl;
+      if (!/^https?:\/\//i.test(url)) {
+        url = 'https://' + url;
+      }
+
+      try { new URL(url); } catch (_) {
+        showError('That doesn\'t look like a valid URL. Try adding https://');
+        return;
+      }
+
+      clearError();
+      setLoading(true);
+
+      // Redirect through /~/go which handles session cookie + proxy URL
+      window.location.href = '/~/go?url=' + encodeURIComponent(url);
+    }
+
+    // ── UI helpers ─────────────────────────────────────────────────────
+    function showError(msg) {
+      status.textContent = msg;
+      status.className = 'status-bar error';
+    }
+
+    function clearError() {
+      status.className = 'status-bar';
+      status.textContent = '';
+    }
+
+    function setLoading(on) {
+      spinner.style.display = on ? 'inline-block' : 'none';
+      btn.disabled = on;
+      btn.childNodes[btn.childNodes.length - 1].textContent = on ? 'Loading…' : 'Navigate';
+    }
+
+    // ── Events ─────────────────────────────────────────────────────────
+    btn.addEventListener('click', function () {
+      navigate(input.value);
+    });
+
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') navigate(input.value);
+      if (e.key !== 'Enter') clearError();
+    });
+
+    // Chips
+    document.querySelectorAll('.chip').forEach(function (chip) {
+      function launch() {
+        var url = chip.dataset.url;
+        if (url) {
+          input.value = url;
+          navigate(url);
+        }
+      }
+      chip.addEventListener('click', launch);
+      chip.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); launch(); }
+      });
+    });
+
+    // Focus input on load
+    input.focus();
+  })();
+</script>
+
+</body>
+</html>

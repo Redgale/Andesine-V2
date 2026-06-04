@@ -1,0 +1,50 @@
+# koyeb.yaml — Andesine proxy service
+#
+# Push this repo to GitHub, then create a new Koyeb service using:
+#   Deploy from → GitHub → your repo
+# Koyeb will auto-detect the Dockerfile and inject PORT automatically.
+#
+# Alternatively, deploy with the Koyeb CLI:
+#   koyeb app create andesine
+#   koyeb service create \
+#     --app andesine \
+#     --git github.com/<you>/andesine \
+#     --git-branch main \
+#     --docker-dockerfile Dockerfile \
+#     --port 3000:http \
+#     --route /:3000 \
+#     --name andesine \
+#     --regions was
+
+name: andesine
+
+services:
+  - name: andesine
+    type: web
+    # Koyeb builds from the Dockerfile in the repo root
+    git:
+      branch: main
+      build_command: ""    # Docker build is used instead
+    docker:
+      dockerfile: Dockerfile
+    ports:
+      - port: 3000
+        protocol: http
+    routes:
+      - path: /
+        port: 3000
+    env:
+      - key: NODE_ENV
+        value: production
+      # PORT is injected automatically by Koyeb — do not set it here
+    health_checks:
+      - path: /~/health
+        port: 3000
+        protocol: http
+        interval: 30
+        timeout: 5
+        unhealthy_threshold: 3
+        healthy_threshold: 1
+    scaling:
+      min: 1
+      max: 1

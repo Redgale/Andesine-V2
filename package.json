@@ -1,26 +1,19 @@
 {
   "name": "andesine",
   "version": "1.0.0",
-  "description": "Andesine — a Scramjet-powered web proxy frontend",
+  "description": "Service-worker-less web proxy powered by Scramjet",
   "type": "module",
-  "main": "src/server.js",
+  "main": "server.mjs",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
   },
-  "keywords": ["proxy", "scramjet", "wisp", "andesine"],
-  "author": "Andesine",
-  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
-    "fastify": "^5.4.0",
-    "@fastify/static": "^8.2.0",
-    "@fastify/websocket": "^11.0.2",
-    "@mercuryworkshop/bare-mux": "^2.1.7",
-    "@mercuryworkshop/libcurl-transport": "^2.0.5",
-    "@mercuryworkshop/epoxy-transport": "^3.0.1",
-    "@mercuryworkshop/scramjet": "https://github.com/MercuryWorkshop/scramjet/releases/download/v2.0.67-alpha.1/mercuryworkshop-scramjet-2.0.67-alpha.1.tgz",
-    "@mercuryworkshop/scramjet-controller": "^0.0.13",
-    "@mercuryworkshop/wisp-js": "^0.4.1",
-    "ws": "^8.18.3"
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
   }
 }
