@@ -2,7 +2,7 @@
  * server.mjs — Andesine proxy server
  *
  * Ties together:
- *  - Express HTTP server
+ *  - Express HTTP server (with express-ws for WebSocket support)
  *  - src/proxy.mjs   → handles /~/sj/… proxy requests
  *  - src/wisp.mjs    → handles /~/wisp WebSocket (Wisp v1)
  *  - src/session.mjs → per-browser cookie jar management
@@ -11,15 +11,14 @@
  */
 
 import express from 'express';
-import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
-import cookieParser from 'cookie-parser';
+import expressWs from 'express-ws';
+import { parse as parseCookies } from 'cookie';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
 import { loadScramjet } from './src/loader.mjs';
 import { createProxyHandler, PROXY_PREFIX } from './src/proxy.mjs';
-import { resolveSessionId, makeId } from './src/session.mjs';
+import { makeId } from './src/session.mjs';
 import { handleWispConnection } from './src/wisp.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,7 +52,15 @@ async function main() {
   console.log('[andesine] Scramjet ready ✓');
 
   const app = express();
-  app.use(cookieParser());
+
+  // Attach express-ws so app.ws() is available and upgrades are handled
+  const { getWss } = expressWs(app);
+
+  // ── Cookie parsing middleware (uses 'cookie' package, no cookie-parser) ──
+  app.use((req, _res, next) => {
+    req.cookies = parseCookies(req.headers.cookie || '');
+    next();
+  });
 
   // ── Static assets ──────────────────────────────────────────────────────
 
@@ -65,22 +72,33 @@ async function main() {
   // Serve everything in public/ (frontend + no-sw-inject.js)
   app.use(express.static(resolve(__dirname, 'public')));
 
+  // ── Wisp WebSocket ─────────────────────────────────────────────────────
+
+  // express-ws makes app.ws() available; routes are matched like HTTP routes
+  app.ws('/~/wisp', (ws, _req) => {
+    handleWispConnection(ws);
+  });
+
+  // Also handle /~/wisp/ with trailing slash or sub-paths
+  app.ws('/~/wisp/*', (ws, _req) => {
+    handleWispConnection(ws);
+  });
+
   // ── Session management ─────────────────────────────────────────────────
 
   /**
    * GET /~/session
    * Ensures the browser has a valid _sjsid cookie and returns the session ID.
-   * Call this once on page load so subsequent /~/go requests include the cookie.
    */
   app.get('/~/session', (req, res) => {
-    let sid = req.cookies?.['_sjsid'];
+    let sid = req.cookies['_sjsid'];
     if (!sid || !/^[A-Za-z0-9_-]{6,16}$/.test(sid)) {
       sid = makeId();
     }
     res.cookie('_sjsid', sid, {
       httpOnly: true,
       sameSite: 'lax',
-      maxAge: 7_200_000, // 2 hours
+      maxAge: 7_200_000, // 2 hours in ms
     });
     res.json({ sessionId: sid });
   });
@@ -90,7 +108,6 @@ async function main() {
   /**
    * GET /~/go?url=<target>
    * Redirects the browser into the proxy for the given URL.
-   * Creates or re-uses the session from the cookie.
    */
   app.get('/~/go', (req, res) => {
     const target = req.query.url;
@@ -102,7 +119,6 @@ async function main() {
     try {
       parsedTarget = new URL(target);
     } catch {
-      // Try prepending https:// and see if it parses
       try {
         parsedTarget = new URL('https://' + target);
       } catch {
@@ -115,7 +131,7 @@ async function main() {
     }
 
     // Issue or reuse session cookie
-    let sid = req.cookies?.['_sjsid'];
+    let sid = req.cookies['_sjsid'];
     if (!sid || !/^[A-Za-z0-9_-]{6,16}$/.test(sid)) {
       sid = makeId();
       res.cookie('_sjsid', sid, {
@@ -140,25 +156,9 @@ async function main() {
     res.json({ status: 'ok', service: 'andesine' });
   });
 
-  // ── HTTP + WebSocket server ────────────────────────────────────────────
+  // ── Start listening ────────────────────────────────────────────────────
 
-  const httpServer = createServer(app);
-
-  // Wisp WebSocket server for multiplexed TCP (used by scramjet's WS transport)
-  const wss = new WebSocketServer({ noServer: true });
-  wss.on('connection', handleWispConnection);
-
-  httpServer.on('upgrade', (req, socket, head) => {
-    if (req.url === '/~/wisp' || req.url?.startsWith('/~/wisp/')) {
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req);
-      });
-    } else {
-      socket.destroy();
-    }
-  });
-
-  httpServer.listen(PORT, HOST, () => {
+  app.listen(PORT, HOST, () => {
     console.log(`[andesine] Listening on http://${HOST}:${PORT}`);
   });
 
@@ -166,7 +166,8 @@ async function main() {
   for (const sig of ['SIGTERM', 'SIGINT']) {
     process.on(sig, () => {
       console.log(`[andesine] ${sig} received — shutting down`);
-      httpServer.close(() => process.exit(0));
+      getWss().close();
+      process.exit(0);
     });
   }
 }
