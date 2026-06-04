@@ -211,7 +211,7 @@ export async function loadScramjet() {
 
   // setWasm stores bytes only for the magic-check; we pass the real bytes so
   // the validity check passes, but getRewriter will use __wasm_mod__ instead.
-  ctx._WASM_B64 = wasmBase64Stub(wasmBuf);
+  ctx._WASM_B64 = wasmBuf.toString('base64');
   vm.runInContext(
     'var _wb = Uint8Array.from(atob(_WASM_B64), function(c){return c.charCodeAt(0)});' +
     '$scramjet.setWasm(_wb);' +
