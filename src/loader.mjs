@@ -157,60 +157,45 @@ export async function loadScramjet() {
   const ctx = buildContext();
   let code = readFileSync(resolve(DIST, 'scramjet.js'), 'utf8');
 
-  // ── Compatibility patch ────────────────────────────────────────────────
+  // ── Compatibility patch: inline regex flags ────────────────────────────
   // The scramjet bundle uses ES2024 inline regex flag syntax `(?i:url)`.
-  // Node.js 22 does not yet support this (it landed in Node 23 / V8 12.4).
-  // We rewrite the single occurrence to an equivalent character-class form.
+  // Node.js <23 / V8 <12.4 doesn't support this; rewrite to character class.
   code = code.replace(/\(\?i:url\)/g, '[Uu][Rr][Ll]');
-  // ──────────────────────────────────────────────────────────────────────
 
-  vm.runInContext(code, ctx, { filename: 'scramjet.js' });
-
-  if (!ctx.$scramjet) {
-    throw new Error('scramjet.js did not set globalThis.$scramjet — bundle may have changed');
-  }
-
-  // ── WASM initialisation ────────────────────────────────────────────────
-  // Problem: V8 vm contexts have their own intrinsic TypedArray constructors.
-  // Even though we set ctx.WebAssembly = globalThis.WebAssembly, calling
-  // `new WebAssembly.Module(uint8array)` INSIDE the vm context still uses
-  // the vm-context's intrinsic WebAssembly, which rejects Uint8Arrays from
-  // any other realm — including ones we inject from outside.
+  // ── WASM realm-boundary patch ──────────────────────────────────────────
+  // V8 vm contexts have their own intrinsic TypedArray constructors.
+  // WebAssembly.Module(uint8array) inside the vm rejects Uint8Arrays from
+  // the outer realm.  Pre-compile the Module in the outer realm and inject
+  // it so the bundle's init code finds __wasm_mod__ instead.
   //
-  // Solution: pre-compile WebAssembly.Module in the OUTER realm (where there
-  // is no realm mismatch), then inject the already-compiled Module object
-  // into the vm context.  We patch the bundle's getRewriter function to use
-  // this pre-compiled module rather than calling `new WebAssembly.Module(i)`.
-  //
-  // The patch targets the one call site in module 3430's h() function:
-  //   (0,n.QR)({module:new WebAssembly.Module(i)})
-  // → (0,n.QR)({module:globalThis.__wasm_mod__||new WebAssembly.Module(i)})
+  // NOTE: Apply this patch BEFORE the first vm.runInContext call so the
+  // bundle only ever runs with the patch in place.  The original code ran
+  // vm.runInContext twice (once without the patch, once with), which caused
+  // the bundle's IIFE to execute twice — double-registering class definitions
+  // and sometimes overwriting the patched code path.
   code = code.replace(
     /\(0,n\.QR\)\(\{module:new WebAssembly\.Module\(i\)\}\)/,
     '(0,n.QR)({module:globalThis.__wasm_mod__||new WebAssembly.Module(i)})'
   );
 
+  // Pre-compile WASM in the outer realm (no realm-boundary issues).
+  const wasmBuf = readFileSync(resolve(DIST, 'scramjet.wasm'));
+  const wasmAB = wasmBuf.buffer.slice(
+    wasmBuf.byteOffset,
+    wasmBuf.byteOffset + wasmBuf.byteLength
+  );
+  ctx.__wasm_mod__ = new WebAssembly.Module(wasmAB);
+
+  // Single run — bundle executes once with all patches applied.
   vm.runInContext(code, ctx, { filename: 'scramjet.js' });
 
   if (!ctx.$scramjet) {
     throw new Error('scramjet.js did not set globalThis.$scramjet — bundle may have changed');
   }
 
-  // Pre-compile WASM in the outer realm (no realm-boundary issues here).
-  const wasmBuf = readFileSync(resolve(DIST, 'scramjet.wasm'));
-  const wasmAB = wasmBuf.buffer.slice(
-    wasmBuf.byteOffset,
-    wasmBuf.byteOffset + wasmBuf.byteLength
-  );
-  const preCompiledModule = new WebAssembly.Module(wasmAB);
-
-  // Inject the pre-compiled Module into the vm context so the patched code
-  // finds it, then satisfy setWasm's Uint8Array magic-bytes check with a
-  // minimal 4-byte stub (the real bytes live in preCompiledModule).
-  ctx.__wasm_mod__ = preCompiledModule;
-
-  // setWasm stores bytes only for the magic-check; we pass the real bytes so
-  // the validity check passes, but getRewriter will use __wasm_mod__ instead.
+  // Feed WASM bytes to $scramjet.setWasm().
+  // __wasm_mod__ (pre-compiled above) handles the actual Module instantiation;
+  // setWasm() also needs the raw bytes for its magic-bytes check.
   ctx._WASM_B64 = wasmBuf.toString('base64');
   vm.runInContext(
     'var _wb = Uint8Array.from(atob(_WASM_B64), function(c){return c.charCodeAt(0)});' +
@@ -218,6 +203,12 @@ export async function loadScramjet() {
     'delete globalThis._WASM_B64;',
     ctx
   );
+
+  // Log what the bundle actually exports so proxy.mjs knows what's usable.
+  const exported = Object.keys(ctx.$scramjet);
+  const fns = exported.filter(k => typeof ctx.$scramjet[k] === 'function');
+  console.log('[loader] $scramjet exports:', exported.join(', '));
+  console.log('[loader] $scramjet functions:', fns.join(', ') || '(none)');
 
   console.log('[loader] scramjet loaded, WASM ready');
   _scramjet = ctx.$scramjet;

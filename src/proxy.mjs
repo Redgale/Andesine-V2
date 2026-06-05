@@ -1,30 +1,29 @@
 /**
- * src/proxy.mjs
+ * src/proxy.mjs  (revised)
  *
- * The "server as service worker" — the heart of the whole approach.
+ * Key changes from the original:
  *
- * ┌─────────────────────────────────────────────────────────────────┐
- * │  Original flow (with SW):                                       │
- * │  browser → SW (intercepts /~/sj/…) → Controller (RPC) →        │
- * │    ScramjetFetchHandler → transport → bare-server → internet    │
- * │                                                                 │
- * │  Our flow (no SW):                                              │
- * │  browser → THIS MODULE (handles /~/sj/…) → internet (direct)   │
- * └─────────────────────────────────────────────────────────────────┘
+ *  1. Replaced $scramjet.rewriteHtml / rewriteJs / rewriteCss / rewriteUrl
+ *     with the local rewriter.mjs module.
  *
- * URL format: /~/sj/<sessionId>/<frameId>/<encodedUrl>
+ *     The original code called those functions directly off $scramjet, but
+ *     dist/scramjet.js is the *client* IIFE bundle — it exposes ScramjetClient,
+ *     setWasm, CookieJar, etc., NOT standalone rewriting helpers.  Every call
+ *     threw TypeError, the catch block returned raw HTML, and the browser
+ *     resolved relative URLs (/_next/static/…) against the proxy origin →
+ *     404s returning HTML → MIME-type mismatch errors in the console.
  *
- *   sessionId  — per-browser-session ID (stored in _sjsid cookie)
- *   frameId    — per-page-load ID (used as part of the scramjet prefix)
- *   encodedUrl — encodeURIComponent(realUrl)
+ *  2. The inject-script snippet now uses a plain <script> block for the init
+ *     payload instead of a data:-URI <script src=...>.  Browsers block
+ *     data:-sourced scripts in many contexts.
  *
- * This module exports a single Express request handler that:
- *   1. Parses the proxy URL.
- *   2. Fetches the real resource with node-fetch (directly — no transport).
- *   3. Ingests Set-Cookie headers into the session's cookie jar.
- *   4. Rewrites HTML / JS / CSS using scramjet's own rewriter functions
- *      (running server-side with the WASM module loaded via src/loader.mjs).
- *   5. Streams or sends the rewritten response back to the browser.
+ *  3. CSS is actively rewritten (url() references).
+ *
+ *  4. JS is served as-is from the upstream.  Dynamic requests (fetch, XHR,
+ *     WebSocket) are handled at runtime by ScramjetClient.hook() if the client
+ *     bootstrap succeeds.  Full static JS rewriting would require a proper
+ *     AST rewriter (the WASM one); that can be re-enabled once the $scramjet
+ *     server API surface is confirmed.
  */
 
 import { getScramjet } from './loader.mjs';
@@ -33,6 +32,12 @@ import {
   ingestSetCookie,
   getCookieHeader,
 } from './session.mjs';
+import {
+  rewriteHtmlAttributes,
+  rewriteCssUrls,
+  buildInjectSnippet,
+  rewriteOneUrl,
+} from './rewriter.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -40,17 +45,15 @@ import {
 
 export const PROXY_PREFIX = '/~/sj/';
 
-// The virtual WASM loader path that the client requests (per scramjet's
-// convention).  We serve it dynamically.
 const VIRTUAL_WASM_PATH = 'scramjet.wasm.js';
 
-// How we identify ourselves to upstream servers.
-const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const DEFAULT_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-// Headers we strip from the upstream response before forwarding.
 const STRIP_RESPONSE_HEADERS = new Set([
-  'content-encoding',   // we decompress before rewriting
-  'content-length',     // we may change the body
+  'content-encoding',
+  'content-length',
   'transfer-encoding',
   'content-security-policy',
   'content-security-policy-report-only',
@@ -60,32 +63,17 @@ const STRIP_RESPONSE_HEADERS = new Set([
   'cross-origin-resource-policy',
 ]);
 
-// Headers we don't forward from the browser to the upstream server.
 const STRIP_REQUEST_HEADERS = new Set([
-  'host',
-  'origin',
-  'referer',
-  'x-forwarded-for',
-  'via',
+  'host', 'origin', 'referer', 'x-forwarded-for', 'via',
 ]);
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Parse a proxy path into its constituent parts.
- *
- * Input:  /~/sj/abc123/def456/https%3A%2F%2Fexample.com%2Fpath
- * Output: { sessionId: 'abc123', frameId: 'def456', realUrl: 'https://example.com/path' }
- *
- * Returns null if the path is not a valid proxy path.
- */
 export function parseProxyPath(pathname) {
   if (!pathname.startsWith(PROXY_PREFIX)) return null;
 
-  // Strip the prefix, then split into at most 3 segments:
-  //   [sessionId, frameId, ...encodedUrlParts]
   const rest = pathname.slice(PROXY_PREFIX.length);
   const slashIdx1 = rest.indexOf('/');
   if (slashIdx1 === -1) return null;
@@ -100,14 +88,9 @@ export function parseProxyPath(pathname) {
   const encodedUrl = rest2.slice(slashIdx2 + 1);
 
   if (!sessionId || !frameId || !encodedUrl) return null;
-
   return { sessionId, frameId, encodedUrl };
 }
 
-/**
- * Decode the URL segment, supporting both plain encodeURIComponent encoding
- * and the hex-xor encoding that advanced scramjet configs may use.
- */
 function decodeProxyUrl(encodedUrl) {
   try {
     return decodeURIComponent(encodedUrl);
@@ -116,172 +99,53 @@ function decodeProxyUrl(encodedUrl) {
   }
 }
 
-/** Build the proxy prefix URL used as ScramjetContext.prefix. */
 export function buildPrefixUrl(req, sessionId, frameId) {
-  const proto = req.headers['x-forwarded-proto'] ?? (req.socket.encrypted ? 'https' : 'http');
-  const host = req.headers['x-forwarded-host'] ?? req.headers.host ?? 'localhost';
+  const proto =
+    req.headers['x-forwarded-proto'] ??
+    (req.socket?.encrypted ? 'https' : 'http');
+  const host =
+    req.headers['x-forwarded-host'] ?? req.headers.host ?? 'localhost';
   return new URL(`${proto}://${host}${PROXY_PREFIX}${sessionId}/${frameId}/`);
 }
 
 /**
- * Rewrite a `Location` redirect header so the browser follows through the
- * proxy instead of leaving it.
+ * Rewrite a redirect Location header through the proxy.
+ * Uses our own rewriteOneUrl rather than $scramjet.rewriteUrl.
  */
-function rewriteLocationHeader(location, realRequestUrl, context) {
+function rewriteLocationHeader(location, realRequestUrl, prefixUrl) {
   if (!location) return null;
-  const { rewriteUrl } = getScramjet();
   try {
-    const absolute = new URL(location, realRequestUrl);
-    return rewriteUrl(absolute.href, context, {
-      origin: new URL(realRequestUrl),
-      base: new URL(realRequestUrl),
-    });
+    const absolute = new URL(location, realRequestUrl).href;
+    return rewriteOneUrl(absolute, realRequestUrl, prefixUrl.href);
   } catch {
-    return location; // best-effort
+    return location;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Scramjet context factory
-// ---------------------------------------------------------------------------
-
-/**
- * Build the ScramjetContext passed to every rewriter call.
- *
- * This mirrors the context that ScramjetFetchHandler constructs in the
- * browser, but running entirely on the server with our own cookie jar and
- * inject-script factory.
- */
-function buildContext(prefixUrl, session, config, sjconfig) {
-  const { CookieJar, defaultConfig } = getScramjet();
-  const effectiveSjconfig = sjconfig ?? defaultConfig;
-
-  /**
-   * getInjectScripts is called by rewriteHtml for every proxied HTML page.
-   * It returns the <script> elements that bootstrap scramjet in the page.
-   *
-   * We replicate the logic from Controller/Frame.yieldGetInjectScripts, but
-   * without the service-worker requirement.  The client side uses
-   * client/no-sw-inject.js instead of controller.inject.js.
-   */
-  function getInjectScripts(_meta, _handler, htmlcontext, script) {
-    const initPayload = {
-      config,
-      sjconfig: effectiveSjconfig,
-      // prefix is a string here; client reconstructs with new URL(...)
-      prefixHref: prefixUrl.href,
-      cookies: session.cookieJar.dump(),
-      // Pass codec as source strings so the client can eval them.
-      // We use the default encodeURIComponent / decodeURIComponent codec.
-      codecEncodeStr: 'function(u){return u?encodeURIComponent(u):u}',
-      codecDecodeStr: 'function(u){return u?decodeURIComponent(u):u}',
-      initHeaders: htmlcontext.headers ?? [],
-      history: htmlcontext.history ?? [],
-    };
-
-    // Inline initialisation script (serialised as a data: URL so the
-    // scramjet html rewriter can inject it as a <script src=...>).
-    const initScript = `
-(function(){
-  var p = ${JSON.stringify(initPayload)};
-  p.prefix = new URL(p.prefixHref);
-  p.codecEncode = ${initPayload.codecEncodeStr};
-  p.codecDecode = ${initPayload.codecDecodeStr};
-  $scramjetController.load(p);
-})();
-    `.trim();
-
-    const initDataUrl =
-      'data:text/javascript;charset=utf-8;base64,' +
-      Buffer.from(initScript).toString('base64');
-
-    return [
-      script(config.scramjetPath),
-      // The virtual WASM loader — served dynamically at
-      // /~/sj/<sid>/<fid>/scramjet.wasm.js
-      script(prefixUrl.href + config.virtualWasmPath),
-      // Our custom inject (replaces controller.inject.js, no SW needed)
-      script(config.injectPath),
-      script(initDataUrl),
-    ];
-  }
-
-  function getWorkerInjectScripts(_meta, _isModule, script) {
-    const workerInit = `
-(function(){
-  var { ScramjetClient, CookieJar, setWasm } = $scramjet;
-  setWasm(Uint8Array.from(atob(self.WASM), function(c){return c.charCodeAt(0)}));
-  delete self.WASM;
-  var context = {
-    config: ${JSON.stringify(effectiveSjconfig)},
-    prefix: new URL(${JSON.stringify(prefixUrl.href)}),
-    interface: {
-      codecEncode: function(u){return u?encodeURIComponent(u):u},
-      codecDecode: function(u){return u?decodeURIComponent(u):u},
-    },
-  };
-  var client = new ScramjetClient(globalThis, { context, transport: null });
-  client.hook();
-})();
-    `.trim();
-
-    return (
-      script(config.scramjetPath) +
-      script(prefixUrl.href + config.virtualWasmPath) +
-      'data:text/javascript;charset=utf-8;base64,' +
-      Buffer.from(workerInit).toString('base64')
-    );
-  }
-
-  return {
-    config: effectiveSjconfig,
-    prefix: prefixUrl,
-    cookieJar: session.cookieJar,
-    interface: {
-      getInjectScripts,
-      getWorkerInjectScripts,
-      codecEncode: (u) => (u ? encodeURIComponent(u) : u),
-      codecDecode: (u) => (u ? decodeURIComponent(u) : u),
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// MIME detection helpers
-// ---------------------------------------------------------------------------
-
-const HTML_MIME = /^text\/html/i;
-const JS_MIME = /^(application\/(javascript|x-javascript|ecmascript)|text\/(javascript|ecmascript))/i;
-const CSS_MIME = /^text\/css/i;
-const WORKER_MIME = JS_MIME; // workers are JS
-
-function contentType(headers) {
-  return headers.get('content-type') ?? '';
 }
 
 // ---------------------------------------------------------------------------
 // Main proxy handler
 // ---------------------------------------------------------------------------
 
-/**
- * Express middleware factory.
- *
- * Usage:
- *   app.use(PROXY_PREFIX, createProxyHandler(config, sjconfig));
- *
- * @param {object} config    Controller config (prefix, paths, codec, …)
- * @param {object} [sjconfig] Optional scramjet config overrides.
- */
 export function createProxyHandler(config, sjconfig) {
-  const { rewriteHtml, rewriteJs, rewriteCss, rewriteUrl } = getScramjet();
+  // We no longer call getScramjet().rewriteHtml etc. — those don't exist on
+  // the browser bundle.  We keep getScramjet() available in case future work
+  // adds WASM-backed JS rewriting via the correct API.
+  let sj;
+  try {
+    sj = getScramjet();
+  } catch {
+    sj = null;
+  }
+
+  if (sj) {
+    const available = Object.keys(sj).filter(k => typeof sj[k] === 'function');
+    console.log('[proxy] $scramjet functions available:', available.join(', ') || '(none)');
+  }
 
   return async function proxyHandler(req, res) {
     // ------------------------------------------------------------------
-    // 1. Parse the proxy URL from the request path.
+    // 1. Parse the proxy URL.
     // ------------------------------------------------------------------
-
-    // Express mounts us at /~/sj/ so req.path begins after the mount.
-    // We reconstruct the full path to stay mount-agnostic.
     const fullPath = req.originalUrl.split('?')[0];
     const parsed = parseProxyPath(fullPath);
 
@@ -290,16 +154,16 @@ export function createProxyHandler(config, sjconfig) {
     }
 
     const { sessionId, frameId, encodedUrl } = parsed;
+
+    // ------------------------------------------------------------------
+    // 2. Virtual WASM loader.
+    // ------------------------------------------------------------------
+    if (encodedUrl === VIRTUAL_WASM_PATH) {
+      return serveVirtualWasm(res);
+    }
+
     const realUrlStr = decodeProxyUrl(encodedUrl);
-
-    // ------------------------------------------------------------------
-    // 2. Handle the virtual WASM loader — a synthetic JS file that
-    //    embeds the WASM binary as a base64 string so the browser can
-    //    call setWasm() without a separate ArrayBuffer fetch.
-    //    Path: /~/sj/<sid>/<fid>/scramjet.wasm.js
-    // ------------------------------------------------------------------
-
-    if (realUrlStr === VIRTUAL_WASM_PATH || encodedUrl === VIRTUAL_WASM_PATH) {
+    if (realUrlStr === VIRTUAL_WASM_PATH) {
       return serveVirtualWasm(res);
     }
 
@@ -314,63 +178,59 @@ export function createProxyHandler(config, sjconfig) {
       return res.status(400).send(`Invalid URL: ${realUrlStr}`);
     }
 
-    // Only allow http/https
     if (realUrl.protocol !== 'http:' && realUrl.protocol !== 'https:') {
       return res.status(400).send('Only http/https URLs are supported');
     }
 
     // ------------------------------------------------------------------
-    // 3. Set up session and context.
+    // 3. Session + prefix.
     // ------------------------------------------------------------------
-
-    const { CookieJar } = getScramjet();
+    const { CookieJar } = sj ?? { CookieJar: null };
     const session = getOrCreateSession(sessionId, CookieJar);
     const prefixUrl = buildPrefixUrl(req, sessionId, frameId);
-    const context = buildContext(prefixUrl, session, config, sjconfig);
 
     // ------------------------------------------------------------------
-    // 4. Forward the browser request to the real server.
+    // 4. Build upstream request headers.
     // ------------------------------------------------------------------
-
-    // Build forwarded headers — strip browser fingerprint, add cookies.
     const upstreamHeaders = new Headers();
     upstreamHeaders.set('User-Agent', DEFAULT_UA);
     upstreamHeaders.set('Accept', req.headers.accept ?? '*/*');
-    upstreamHeaders.set('Accept-Language', req.headers['accept-language'] ?? 'en-US,en;q=0.9');
-    upstreamHeaders.set('Accept-Encoding', 'identity'); // disable compression — we rewrite text
+    upstreamHeaders.set(
+      'Accept-Language',
+      req.headers['accept-language'] ?? 'en-US,en;q=0.9'
+    );
+    // Disable compression — we need to rewrite plain text.
+    upstreamHeaders.set('Accept-Encoding', 'identity');
 
-    // Forward any safe headers the browser sent.
-    const PASSTHROUGH = ['if-modified-since', 'if-none-match', 'cache-control', 'range'];
+    const PASSTHROUGH = [
+      'if-modified-since', 'if-none-match', 'cache-control', 'range',
+    ];
     for (const h of PASSTHROUGH) {
       if (req.headers[h]) upstreamHeaders.set(h, req.headers[h]);
     }
 
-    // Restore cookies from the session jar.
     const cookieHeader = getCookieHeader(session, realUrl);
     if (cookieHeader) upstreamHeaders.set('Cookie', cookieHeader);
 
-    // Reconstruct Referer from the client Referer header (un-proxify it).
+    // Un-proxify the Referer header.
     const rawReferer = req.headers.referer ?? req.headers.referrer;
     if (rawReferer) {
       try {
         const refUrl = new URL(rawReferer);
-        const refPath = refUrl.pathname;
-        if (refPath.startsWith(PROXY_PREFIX)) {
-          const refParsed = parseProxyPath(refPath);
+        if (refUrl.pathname.startsWith(PROXY_PREFIX)) {
+          const refParsed = parseProxyPath(refUrl.pathname);
           if (refParsed) {
-            const realReferer = decodeProxyUrl(refParsed.encodedUrl);
-            if (realReferer) upstreamHeaders.set('Referer', realReferer);
+            const realRef = decodeProxyUrl(refParsed.encodedUrl);
+            if (realRef) upstreamHeaders.set('Referer', realRef);
           }
         }
       } catch { /* ignore */ }
     }
 
-    // Forward origin header
     if (req.headers.origin) {
       upstreamHeaders.set('Origin', realUrl.origin);
     }
 
-    // Read the request body for POST/PUT/PATCH
     let body = null;
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
       body = await readBody(req);
@@ -380,16 +240,15 @@ export function createProxyHandler(config, sjconfig) {
     }
 
     // ------------------------------------------------------------------
-    // 5. Fetch the real resource.
+    // 5. Fetch upstream.
     // ------------------------------------------------------------------
-
-    let upstreamResponse;
+    let upstream;
     try {
-      upstreamResponse = await fetch(realUrl.href, {
+      upstream = await fetch(realUrl.href, {
         method: req.method,
         headers: upstreamHeaders,
         body,
-        redirect: 'manual', // we handle redirects ourselves
+        redirect: 'manual',
         signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
@@ -398,90 +257,82 @@ export function createProxyHandler(config, sjconfig) {
     }
 
     // ------------------------------------------------------------------
-    // 6. Persist cookies from the upstream response.
+    // 6. Persist cookies.
     // ------------------------------------------------------------------
+    ingestSetCookie(session, realUrl, upstream.headers);
 
-    ingestSetCookie(session, realUrl, upstreamResponse.headers);
-
-    // Also set cookies in the browser for the proxy origin (so scripts can
-    // read them via document.cookie — scramjet's cookie hook handles this).
-    const setCookieLines = upstreamResponse.headers.getSetCookie?.() ?? [];
+    const setCookieLines = upstream.headers.getSetCookie?.() ?? [];
     for (const line of setCookieLines) {
       res.append('Set-Cookie', sanitizeSetCookie(line));
     }
 
     // ------------------------------------------------------------------
-    // 7. Handle redirects: rewrite the Location header.
+    // 7. Redirects.
     // ------------------------------------------------------------------
-
-    if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
-      const location = upstreamResponse.headers.get('location');
-      if (location) {
-        const rewritten = rewriteLocationHeader(location, realUrl, context);
-        res.setHeader('Location', rewritten);
+    if (upstream.status >= 300 && upstream.status < 400) {
+      const loc = upstream.headers.get('location');
+      if (loc) {
+        res.setHeader(
+          'Location',
+          rewriteLocationHeader(loc, realUrl.href, prefixUrl)
+        );
       }
-      return res.status(upstreamResponse.status).end();
+      return res.status(upstream.status).end();
     }
 
     // ------------------------------------------------------------------
-    // 8. Build the response headers for the browser.
+    // 8. Response headers.
     // ------------------------------------------------------------------
-
-    for (const [key, value] of upstreamResponse.headers) {
+    for (const [key, value] of upstream.headers) {
       if (!STRIP_RESPONSE_HEADERS.has(key.toLowerCase())) {
         res.setHeader(key, value);
       }
     }
-
-    // Relax security policies so scramjet's hooks work.
     res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
     res.removeHeader('X-Frame-Options');
 
     // ------------------------------------------------------------------
-    // 9. Rewrite the body based on content type.
+    // 9. Rewrite body.
     // ------------------------------------------------------------------
+    const ct = upstream.headers.get('content-type') ?? '';
 
-    const ct = contentType(upstreamResponse.headers);
-
-    if (HTML_MIME.test(ct)) {
-      await rewriteHtmlResponse(res, upstreamResponse, realUrl, context);
-    } else if (JS_MIME.test(ct)) {
-      await rewriteJsResponse(res, upstreamResponse, realUrl, context);
-    } else if (CSS_MIME.test(ct)) {
-      await rewriteCssResponse(res, upstreamResponse, realUrl, context);
+    if (/^text\/html/i.test(ct)) {
+      await handleHtml(res, upstream, realUrl, prefixUrl, session, config, sjconfig);
+    } else if (/^text\/css/i.test(ct)) {
+      await handleCss(res, upstream, realUrl, prefixUrl);
+    } else if (/^(application\/(javascript|x-javascript|ecmascript)|text\/(javascript|ecmascript))/i.test(ct)) {
+      // Pass JS through unchanged; ScramjetClient.hook() handles dynamic
+      // runtime requests.  Full static JS rewriting needs the WASM API
+      // (future work once the correct $scramjet server interface is found).
+      res.status(upstream.status);
+      res.setHeader('Content-Type', 'application/javascript');
+      res.send(Buffer.from(await upstream.arrayBuffer()));
     } else {
-      // Pass through binary/image/font/etc. unchanged.
-      res.status(upstreamResponse.status);
-      const buf = Buffer.from(await upstreamResponse.arrayBuffer());
-      res.send(buf);
+      res.status(upstream.status);
+      res.send(Buffer.from(await upstream.arrayBuffer()));
     }
   };
 
   // -----------------------------------------------------------------------
-  // Rewriting helpers
+  // HTML handler
   // -----------------------------------------------------------------------
-
-  async function rewriteHtmlResponse(res, upstream, realUrl, context) {
+  async function handleHtml(res, upstream, realUrl, prefixUrl, session, config, sjconfig) {
     const html = await upstream.text();
-    const meta = {
-      origin: new URL(realUrl),
-      base: new URL(realUrl),
-    };
-    const htmlcontext = {
-      loadScripts: true,
-      inline: false,
-      source: realUrl.href,
-      headers: [...upstream.headers],
-      history: [],
-    };
+
+    const injectSnippet = buildInjectSnippet(
+      prefixUrl,
+      config,
+      session,
+      sjconfig ?? (sj?.defaultConfig ?? null)
+    );
 
     let rewritten;
     try {
-      rewritten = rewriteHtml(html, context, meta, htmlcontext);
+      rewritten = rewriteHtmlAttributes(html, realUrl, prefixUrl, injectSnippet);
     } catch (err) {
-      console.error('[proxy] rewriteHtml error:', err.message);
-      rewritten = html; // fall back to passthrough
+      console.error('[proxy] rewriteHtmlAttributes error:', err.message);
+      rewritten = html;
     }
 
     res.status(upstream.status);
@@ -489,40 +340,17 @@ export function createProxyHandler(config, sjconfig) {
     res.send(rewritten);
   }
 
-  async function rewriteJsResponse(res, upstream, realUrl, context) {
-    const js = await upstream.text();
-    const meta = {
-      origin: new URL(realUrl),
-      base: new URL(realUrl),
-    };
-
-    let rewritten;
-    try {
-      const result = rewriteJs(js, realUrl.href, context, meta, false);
-      // rewriteJs can return a string or Uint8Array
-      rewritten = result instanceof Uint8Array ? Buffer.from(result) : result;
-    } catch (err) {
-      console.error('[proxy] rewriteJs error:', err.message);
-      rewritten = js;
-    }
-
-    res.status(upstream.status);
-    res.setHeader('Content-Type', 'application/javascript');
-    res.send(rewritten);
-  }
-
-  async function rewriteCssResponse(res, upstream, realUrl, context) {
+  // -----------------------------------------------------------------------
+  // CSS handler
+  // -----------------------------------------------------------------------
+  async function handleCss(res, upstream, realUrl, prefixUrl) {
     const css = await upstream.text();
-    const meta = {
-      origin: new URL(realUrl),
-      base: new URL(realUrl),
-    };
 
     let rewritten;
     try {
-      rewritten = rewriteCss(css, context, meta);
+      rewritten = rewriteCssUrls(css, realUrl.href, prefixUrl.href);
     } catch (err) {
-      console.error('[proxy] rewriteCss error:', err.message);
+      console.error('[proxy] rewriteCssUrls error:', err.message);
       rewritten = css;
     }
 
@@ -540,8 +368,6 @@ let _wasmB64Cache = null;
 
 async function serveVirtualWasm(res) {
   if (!_wasmB64Cache) {
-    // Read WASM from the loader's vm context via the scramjet API.
-    // We can't easily re-read the file, so we serve it from the dist path.
     const { readFileSync } = await import('fs');
     const { resolve, dirname } = await import('path');
     const { fileURLToPath } = await import('url');
@@ -554,25 +380,19 @@ async function serveVirtualWasm(res) {
 }
 
 // ---------------------------------------------------------------------------
-// Utility
+// Utilities
 // ---------------------------------------------------------------------------
 
-/** Read the request body as a Buffer. */
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    req.on('data', c => chunks.push(c));
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
 
-/**
- * Sanitise a Set-Cookie header so it is scoped to the proxy origin rather
- * than leaking real domain names.
- */
 function sanitizeSetCookie(line) {
-  // Strip Domain=, Secure (if we're on http), SameSite=None, __Host- prefix
   return line
     .replace(/;\s*domain=[^;]*/gi, '')
     .replace(/;\s*samesite=none/gi, '')
